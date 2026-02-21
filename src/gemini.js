@@ -13,13 +13,19 @@ ${JSON.stringify(data)}
 `;
 
   const response = await axios.post(
-    "https://generativelanguage.googleapis.com/v1beta/models/gemini-pro:generateContent?key=" + apiKey,
+    "https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent",
     {
       contents: [
         {
           parts: [{ text: prompt }]
         }
       ]
+    },
+    {
+      headers: {
+        "Content-Type": "application/json",
+        "x-goog-api-key": apiKey
+      }
     }
   );
 
