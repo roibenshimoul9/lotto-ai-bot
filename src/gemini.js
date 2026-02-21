@@ -1,4 +1,6 @@
-import { GoogleGenerativeAI } from "@google/genai";
+import pkg from "@google/genai";
+
+const { GoogleGenerativeAI } = pkg;
 
 export async function askGemini(data) {
   const apiKey = process.env.GEMINI_API_KEY;
