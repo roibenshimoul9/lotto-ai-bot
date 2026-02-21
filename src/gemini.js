@@ -1,13 +1,8 @@
-import pkg from "@google/genai";
-
-const { GoogleGenerativeAI } = pkg;
+import axios from "axios";
 
 export async function askGemini(data) {
   const apiKey = process.env.GEMINI_API_KEY;
   if (!apiKey) throw new Error("Missing GEMINI_API_KEY");
-
-  const genAI = new GoogleGenerativeAI(apiKey);
-  const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash" });
 
   const prompt = `
 אתה אנליסט לוטו.
@@ -17,6 +12,16 @@ export async function askGemini(data) {
 ${JSON.stringify(data)}
 `;
 
-  const result = await model.generateContent(prompt);
-  return result.response.text();
+  const response = await axios.post(
+    "https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=" + apiKey,
+    {
+      contents: [
+        {
+          parts: [{ text: prompt }]
+        }
+      ]
+    }
+  );
+
+  return response.data.candidates[0].content.parts[0].text;
 }
