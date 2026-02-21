@@ -6,14 +6,14 @@ export async function askGemini(data) {
 
   const prompt = `
 אתה אנליסט לוטו.
-על בסיס הנתונים הבאים תן 3 סטים של 6 מספרים (1-37) ומספר חזק (1-7).
-ענה רק ב JSON.
+על סמך הנתונים הבאים בחר 3 מספרים בטווח 1-37 ו-3 מספרים בטווח 1-7.
+ענה אך ורק JSON תקין.
 
 ${JSON.stringify(data)}
 `;
 
   const response = await axios.post(
-    "https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent",
+    "https://generativelanguage.googleapis.com/v1/models/gemini-1.5-flash:generateContent",
     {
       contents: [
         {
