@@ -13,7 +13,7 @@ ${JSON.stringify(data)}
 `;
 
   const response = await axios.post(
-    "https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash-latest:generateContent",
+    "https://api.google.ai/v1/models/gemini-1.5-flash:generateContent",
     {
       contents: [
         {
@@ -24,7 +24,7 @@ ${JSON.stringify(data)}
     {
       headers: {
         "Content-Type": "application/json",
-        "x-goog-api-key": apiKey
+        "Authorization": `Bearer ${apiKey}`
       }
     }
   );
