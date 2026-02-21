@@ -1,21 +1,28 @@
 name: Lotto Job
 
 on:
+  workflow_dispatch:
   schedule:
     - cron: "0 18 * * *"
-  workflow_dispatch:
 
 jobs:
   run-job:
     runs-on: ubuntu-latest
 
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout repo
+        uses: actions/checkout@v4
 
-      - uses: actions/setup-node@v4
+      - name: Setup Node
+        uses: actions/setup-node@v4
         with:
           node-version: 20
 
-      - run: npm install
+      - name: Install dependencies
+        run: npm install
 
-      - run: node src/job.js
+      - name: Run Lotto Script
+        run: node src/job.js
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
