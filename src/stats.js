@@ -1,192 +1,120 @@
 // src/stats.js
-export function computeStats(draws, opts = {}) {
+
+export function חשבסטטיסטיקה(draws, opts = {}) {
+
   const {
-    maxNumber = 37,
-    windowSize = 200,      // חלון "אחרונות" לחמים/קרים עדכניים
-    topPairs = 15,         // כמה זוגות להציג
-    includePairs = true
+    מקסמספר = 37,
+    חלוןאחרון = 200,
+    מספרזוגות = 12
   } = opts;
 
-  // draws: מערך של { main: [..6 numbers..], strong: number, date?: string, drawNo?: string }
   const N = draws.length;
-  if (!N) throw new Error("No draws provided");
+  if (!N) throw new Error("אין נתונים");
 
-  const clampWindow = Math.max(1, Math.min(windowSize, N));
-  const recent = draws.slice(0, clampWindow); // בהנחה שהדאטה מסודר מהחדש לישן
+  const חלון = Math.min(חלוןאחרון, N);
+  const אחרונים = draws.slice(0, חלון);
 
-  // --- תדירויות ---
-  const freqAll = Array(maxNumber + 1).fill(0);
-  const freqRecent = Array(maxNumber + 1).fill(0);
+  const תדירותכללית = Array(מקסמספר + 1).fill(0);
+  const תדירותאחרונים = Array(מקסמספר + 1).fill(0);
+  const הופעהאחרונה = Array(מקסמספר + 1).fill(null);
+  const זוגות = new Map();
 
-  // --- Overdue (כמה הגרלות מאז הופעה אחרונה) ---
-  // 0 = הופיע בהגרלה האחרונה, 1 = לפני 1 הגרלות, ... Infinity = לא הופיע כלל
-  const lastSeenIndex = Array(maxNumber + 1).fill(null); // אינדקס ב-draws (0=חדש)
-  
-  // --- זוגות ---
-  const pairCounts = new Map(); // key "a-b" -> count
-
-  const addPairsFromMain = (nums) => {
-    const sorted = [...nums].sort((a,b)=>a-b);
-    for (let i=0; i<sorted.length; i++) {
-      for (let j=i+1; j<sorted.length; j++) {
-        const a = sorted[i], b = sorted[j];
-        const key = `${a}-${b}`;
-        pairCounts.set(key, (pairCounts.get(key) || 0) + 1);
-      }
-    }
-  };
-
-  // עובר על כל ההגרלות
   for (let i = 0; i < N; i++) {
-    const d = draws[i];
-    const main = d.main || [];
-    for (const num of main) {
-      if (num >= 1 && num <= maxNumber) {
-        freqAll[num]++;
-        if (lastSeenIndex[num] === null) lastSeenIndex[num] = i; // פעם ראשונה מהחדש => הופעה אחרונה
+    const הגרלה = draws[i];
+    const ראשיים = הגרלה.main;
+
+    for (const מספר of ראשיים) {
+      תדירותכללית[מספר]++;
+      if (הופעהאחרונה[מספר] === null)
+        הופעהאחרונה[מספר] = i;
+    }
+
+    const מסודר = [...ראשיים].sort((a,b)=>a-b);
+    for (let a=0;a<מסודר.length;a++) {
+      for (let b=a+1;b<מסודר.length;b++) {
+        const מפתח = `${מסודר[a]}-${מסודר[b]}`;
+        זוגות.set(מפתח, (זוגות.get(מפתח)||0)+1);
       }
     }
-    if (includePairs && main.length) addPairsFromMain(main);
   }
 
-  // תדירויות בחלון האחרון
-  for (let i = 0; i < clampWindow; i++) {
-    const d = recent[i];
-    const main = d.main || [];
-    for (const num of main) {
-      if (num >= 1 && num <= maxNumber) freqRecent[num]++;
+  for (let i=0;i<חלון;i++) {
+    for (const מספר of אחרונים[i].main) {
+      תדירותאחרונים[מספר]++;
     }
   }
 
-  // --- סטטיסטיקה תאורטית: expected ו-zscore ---
-  // בכל הגרלה יש 6 מספרים "מיין" מתוך 37 => p = 6/37 לכל מספר בכל הגרלה
-  const p = 6 / maxNumber;
-  const expected = N * p;
-  const variance = N * p * (1 - p);
-  const sd = Math.sqrt(variance);
+  const הסתברות = 6 / מקסמספר;
+  const צפוימספר = N * הסתברות;
+  const שונות = N * הסתברות * (1-הסתברות);
+  const סטייתתקן = Math.sqrt(שונות);
 
-  const zScores = Array(maxNumber + 1).fill(0);
-  for (let num = 1; num <= maxNumber; num++) {
-    zScores[num] = sd > 0 ? (freqAll[num] - expected) / sd : 0;
-  }
+  const רשימה = [];
 
-  // --- Chi-square כולל ---
-  // sum((obs-exp)^2/exp) על 1..37
-  let chiSquare = 0;
-  for (let num = 1; num <= maxNumber; num++) {
-    const obs = freqAll[num];
-    chiSquare += ((obs - expected) ** 2) / (expected || 1);
-  }
-  const df = maxNumber - 1;
-
-  // --- Hot / Cold ---
-  // HOT = הכי הרבה הופעות, COLD = הכי מעט הופעות
-  const listAll = [];
-  const listRecent = [];
-  for (let num = 1; num <= maxNumber; num++) {
-    const overdue = (lastSeenIndex[num] === null) ? Infinity : lastSeenIndex[num];
-    listAll.push({
-      num,
-      count: freqAll[num],
-      pct: (freqAll[num] / (N * 6)) * 100,
-      z: zScores[num],
-      overdue
-    });
-    listRecent.push({
-      num,
-      count: freqRecent[num],
-      pct: (freqRecent[num] / (clampWindow * 6)) * 100
+  for (let מספר=1; מספר<=מקסמספר; מספר++) {
+    const z = סטייתתקן>0 ? (תדירותכללית[מספר]-צפוימספר)/סטייתתקן : 0;
+    רשימה.push({
+      מספר,
+      תדירות: תדירותכללית[מספר],
+      z,
+      איחור: הופעהאחרונה[מספר] ?? Infinity
     });
   }
 
-  const sortDescCount = (a,b) => b.count - a.count || a.num - b.num;
-  const sortAscCount  = (a,b) => a.count - b.count || a.num - b.num;
+  const חמים = [...רשימה].sort((a,b)=>b.תדירות-a.תדירות).slice(0,10);
+  const קרים = [...רשימה].sort((a,b)=>a.תדירות-b.תדירות).slice(0,10);
+  const מאחרים = [...רשימה].sort((a,b)=>b.איחור-a.איחור).slice(0,10);
 
-  const hotAll = [...listAll].sort(sortDescCount).slice(0, 10);
-  const coldAll = [...listAll].sort(sortAscCount).slice(0, 10);
+  const זוגותחזקים = [...זוגות.entries()]
+    .map(([מפתח,כמות])=>{
+      const [a,b]=מפתח.split("-").map(Number);
+      return {a,b,כמות};
+    })
+    .sort((x,y)=>y.כמות-x.כמות)
+    .slice(0,מספרזוגות);
 
-  const hotRecent = [...listRecent].sort(sortDescCount).slice(0, 10);
-  const coldRecent = [...listRecent].sort(sortAscCount).slice(0, 10);
-
-  const overdueTop = [...listAll]
-    .filter(x => Number.isFinite(x.overdue))
-    .sort((a,b) => b.overdue - a.overdue)
-    .slice(0, 10);
-
-  // זוגות נפוצים
-  let topPairList = [];
-  if (includePairs) {
-    topPairList = [...pairCounts.entries()]
-      .map(([key, count]) => {
-        const [a,b] = key.split("-").map(Number);
-        return { a, b, count };
-      })
-      .sort((x,y) => y.count - x.count || x.a - y.a || x.b - y.b)
-      .slice(0, topPairs);
+  let כי2 = 0;
+  for (let מספר=1;מספר<=מקסמספר;מספר++) {
+    כי2 += ((תדירותכללית[מספר]-צפוימספר)**2)/(צפוימספר||1);
   }
 
   return {
-    meta: {
-      totalDraws: N,
-      windowSize: clampWindow,
-      maxNumber,
-      expectedPerNumber: expected,
-      sdPerNumber: sd,
-      chiSquare,
-      df
-    },
-    tables: {
-      all: listAll.sort((a,b)=> b.count - a.count),
-      recent: listRecent.sort((a,b)=> b.count - a.count)
-    },
-    highlights: {
-      hotAll,
-      coldAll,
-      hotRecent,
-      coldRecent,
-      overdueTop,
-      topPairs: topPairList
-    }
+    N,
+    חלון,
+    צפוימספר,
+    סטייתתקן,
+    כי2,
+    חמים,
+    קרים,
+    מאחרים,
+    זוגותחזקים
   };
 }
 
-export function formatStatsMessage(stats) {
-  const { meta, highlights } = stats;
+export function פורמטלהודעה(נתונים) {
 
-  const fmtList = (arr, fields) =>
-    arr.map(x => {
-      const parts = [];
-      for (const f of fields) {
-        if (f === "num") parts.push(`${x.num}`);
-        if (f === "count") parts.push(`(${x.count})`);
-        if (f === "pct") parts.push(`${x.pct.toFixed(2)}%`);
-        if (f === "z") parts.push(`z=${x.z.toFixed(2)}`);
-        if (f === "overdue") parts.push(`overdue=${x.overdue}`);
-      }
-      return parts.join(" ");
-    }).join(", ");
+  const רשום = arr =>
+    arr.map(x=>`${x.מספר ?? x.a+"-"+x.b} (${x.תדירות ?? x.כמות})`).join(", ");
 
-  const fmtPairs = (pairs) =>
-    pairs.map(p => `${p.a}-${p.b} (${p.count})`).join(", ");
+  return `
+📊 ניתוח סטטיסטי (מתוך ${נתונים.N} הגרלות)
 
-  let msg = "";
-  msg += `📊 *Lotto Stats (Main numbers)*\n`;
-  msg += `• Draws analyzed: *${meta.totalDraws}*\n`;
-  msg += `• Recent window: *${meta.windowSize}*\n`;
-  msg += `• Expected count/number: *${meta.expectedPerNumber.toFixed(2)}* (sd=${meta.sdPerNumber.toFixed(2)})\n`;
-  msg += `• Chi-square: *${meta.chiSquare.toFixed(2)}* (df=${meta.df})\n\n`;
+🔥 חמים:
+${רשום(נתונים.חמים)}
 
-  msg += `🔥 *Hot (All ${meta.totalDraws})*: ${fmtList(highlights.hotAll, ["num","count","z"])}\n`;
-  msg += `🧊 *Cold (All ${meta.totalDraws})*: ${fmtList(highlights.coldAll, ["num","count","z"])}\n\n`;
+🧊 קרים:
+${רשום(נתונים.קרים)}
 
-  msg += `⚡ *Hot (Last ${meta.windowSize})*: ${fmtList(highlights.hotRecent, ["num","count"])}\n`;
-  msg += `❄️ *Cold (Last ${meta.windowSize})*: ${fmtList(highlights.coldRecent, ["num","count"])}\n\n`;
+⏳ מאחרים:
+${נתונים.מאחרים.map(x=>`${x.מספר} (${x.איחור} הגרלות)`).join(", ")}
 
-  msg += `⏳ *Most Overdue*: ${fmtList(highlights.overdueTop, ["num","overdue","count"])}\n\n`;
+👥 זוגות נפוצים:
+${רשום(נתונים.זוגותחזקים)}
 
-  if (highlights.topPairs?.length) {
-    msg += `👥 *Top Pairs*: ${fmtPairs(highlights.topPairs)}\n`;
-  }
+📈 צפוי לכל מספר: ${נתונים.צפוימספר.toFixed(2)}
+📊 סטיית תקן: ${נתונים.סטייתתקן.toFixed(2)}
+📐 Chi-Square: ${נתונים.כי2.toFixed(2)}
 
-  return msg;
+⚠️ לוטו הוא משחק אקראי – זה ניתוח נתונים, לא ניבוי זכייה.
+`;
 }
