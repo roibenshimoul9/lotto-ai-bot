@@ -15,18 +15,17 @@ const KEEP_LAST = 1000;
 /* ================= TELEGRAM ================= */
 
 async function sendTelegram(text) {
-  try {
-    await axios.post(`https://api.telegram.org/bot${BOT}/sendMessage`, {
+  await axios.post(
+    `https://api.telegram.org/bot${BOT}/sendMessage`,
+    {
       chat_id: CHAT,
       text,
       disable_web_page_preview: true
-    });
-  } catch (err) {
-    console.log("Telegram error:", err.message);
-  }
+    }
+  );
 }
 
-/* ================= CSV HELPERS ================= */
+/* ================= CSV ================= */
 
 function readCSV() {
   if (!fs.existsSync(CSV_PATH)) return [];
@@ -35,136 +34,119 @@ function readCSV() {
     .filter(Boolean);
 }
 
-function writeCSV(lines) {
+function trimCSV(lines) {
   const trimmed = lines.slice(0, KEEP_LAST);
   fs.writeFileSync(CSV_PATH, trimmed.join("\n") + "\n");
+  return trimmed;
 }
 
-function drawExists(drawNumber, lines) {
-  return lines.some(line => line.startsWith(drawNumber + ","));
-}
+/* ================= STATISTICS ================= */
 
-function getHighestDraw(lines) {
-  let max = 0;
+function analyze(lines) {
+
+  const freq = {};
+  const strongFreq = {};
+
+  for (let i = 1; i <= 37; i++) freq[i] = 0;
+  for (let i = 1; i <= 7; i++) strongFreq[i] = 0;
+
   for (const line of lines) {
-    const num = Number(line.split(",")[0]);
-    if (num > max) max = num;
+    const parts = line.split(",");
+    const nums = parts.slice(1,7).map(Number);
+    const strong = Number(parts[7]);
+
+    nums.forEach(n => freq[n]++);
+    strongFreq[strong]++;
   }
-  return max;
+
+  const sorted = Object.entries(freq)
+    .sort((a,b) => b[1] - a[1]);
+
+  const hot = sorted.slice(0,6).map(x => x[0]);
+  const cold = sorted.slice(-6).map(x => x[0]);
+
+  return { freq, strongFreq, hot, cold };
 }
 
-/* ================= FETCH FROM PAIS ARCHIVE ================= */
-/*
-אנחנו לא גורדים HTML.
-במקום זה נשתמש ב-POSTBACK של ASP.NET כדי למשוך תוצאה לפי מספר הגרלה.
-*/
+/* ================= RECOMMENDATIONS ================= */
 
-async function fetchDrawFromPais(drawNumber) {
-  try {
-    const url = "https://www.pais.co.il/lotto/archive.aspx";
+function generateRecommendations(freq, strongFreq) {
 
-    const res = await axios.post(url, new URLSearchParams({
-      drawNumber: drawNumber
-    }), {
-      headers: {
-        "Content-Type": "application/x-www-form-urlencoded"
-      }
-    });
+  const numbers = Object.keys(freq)
+    .sort((a,b) => freq[b] - freq[a]);
 
-    const html = res.data;
+  const strongSorted = Object.keys(strongFreq)
+    .sort((a,b) => strongFreq[b] - strongFreq[a]);
 
-    const matches = [...html.matchAll(/class="ball[^"]*">(\d+)<\/span>/g)];
+  const lines = [];
 
-    if (matches.length < 7) return null;
+  for (let i = 0; i < 8; i++) {
 
-    const nums = matches.map(m => Number(m[1]));
+    const chosen = numbers
+      .slice(i, i + 12)
+      .sort(() => 0.5 - Math.random())
+      .slice(0,6)
+      .sort((a,b) => a-b);
 
-    return {
-      drawNumber,
-      main: nums.slice(0,6),
-      strong: nums[6]
-    };
+    const strong = strongSorted[
+      Math.floor(Math.random() * strongSorted.length)
+    ];
 
-  } catch (err) {
-    console.log("Pais fetch failed:", err.message);
-    return null;
+    lines.push(`${chosen.join(", ")} | חזק: ${strong}`);
   }
-}
 
-/* ================= FALLBACK ================= */
-
-async function fetchDrawFallback(drawNumber) {
-  try {
-    const url = `https://lotteryguru.com/israel-lottery-results`;
-    const res = await axios.get(url);
-    const html = res.data;
-
-    if (!html.includes(drawNumber)) return null;
-
-    const matches = [...html.matchAll(/class="ball[^"]*">(\d+)<\/span>/g)];
-
-    if (matches.length < 7) return null;
-
-    const nums = matches.map(m => Number(m[1]));
-
-    return {
-      drawNumber,
-      main: nums.slice(0,6),
-      strong: nums[6]
-    };
-
-  } catch (err) {
-    console.log("Fallback failed:", err.message);
-    return null;
-  }
+  return lines;
 }
 
 /* ================= MAIN ================= */
 
 async function main() {
 
-  const lines = readCSV();
-  const highest = getHighestDraw(lines);
+  const now = new Date();
+  const day = now.getDay(); // 1=Monday, 5=Friday
+  const hour = now.getHours();
 
-  if (!highest) {
-    console.log("No previous draw found in CSV.");
+  if (!( (day === 1 || day === 5) && hour >= 7 && hour <= 12 )) {
+    console.log("Not scheduled time.");
     return;
   }
 
-  const nextDraw = highest + 1;
-  console.log("Checking draw:", nextDraw);
+  let lines = readCSV();
 
-  let result = await fetchDrawFromPais(nextDraw);
-
-  if (!result) {
-    console.log("Primary source failed. Trying fallback...");
-    result = await fetchDrawFallback(nextDraw);
-  }
-
-  if (!result) {
-    console.log("No new draw found.");
+  if (lines.length === 0) {
+    console.log("CSV empty.");
     return;
   }
 
-  if (drawExists(result.drawNumber, lines)) {
-    console.log("Draw already exists. Skipping.");
-    return;
-  }
+  lines = trimCSV(lines);
 
-  const newLine =
-    `${result.drawNumber},${result.main.join(",")},${result.strong}`;
+  const latestDraw = lines[0].split(",")[0];
 
-  const updated = [newLine, ...lines];
+  const { freq, strongFreq, hot, cold } = analyze(lines);
 
-  writeCSV(updated);
+  const recommendations = generateRecommendations(freq, strongFreq);
 
-  await sendTelegram(
-    `📢 הגרלה חדשה נוספה!\n#${result.drawNumber}\n${result.main.join(", ")} | חזק: ${result.strong}`
-  );
+  const message =
+`📊 לוטו – ניתוח שבועי AI
 
-  console.log("New draw saved successfully.");
+🎯 הגרלה אחרונה: #${latestDraw}
+
+🔥 חמים:
+${hot.join(", ")}
+
+❄ קרים:
+${cold.join(", ")}
+
+🧠 מבוסס על ${lines.length} הגרלות אחרונות
+
+🎟 המלצה – 8 שורות:
+
+${recommendations.map((l,i)=>`${i+1}. ${l}`).join("\n")}
+`;
+
+  await sendTelegram(message);
+
+  console.log("Weekly analysis sent.");
 }
 
-main().catch(err => {
-  console.error("Fatal error:", err.message);
-});
+main().catch(err => console.error(err));
