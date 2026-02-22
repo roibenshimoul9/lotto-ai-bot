@@ -6,7 +6,7 @@ const BOT = process.env.TELEGRAM_BOT_TOKEN;
 const CHAT = process.env.TELEGRAM_CHAT_ID;
 const GEMINI = process.env.GEMINI_API_KEY;
 
-const CSV_PATH = "data/lotto.csv";
+const CSV_PATH = "data/Lotto.csv";
 const כמותהגרלות = 1000;
 
 async function שלח(טקסט) {
