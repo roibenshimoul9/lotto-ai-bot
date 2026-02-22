@@ -1,9 +1,9 @@
 import axios from "axios";
 import fs from "fs";
-import puppeteer from "puppeteer";
 
 const TELEGRAM_TOKEN = process.env.TELEGRAM_BOT_TOKEN;
 const TELEGRAM_CHAT_ID = process.env.TELEGRAM_CHAT_ID;
+const GEMINI_API_KEY = process.env.GEMINI_API_KEY;
 
 // ---------------- TELEGRAM ----------------
 
@@ -17,115 +17,97 @@ async function sendTelegram(text) {
   );
 }
 
-// ---------------- GET LAST SAVED DRAW ----------------
+// ---------------- LOAD LAST 1000 FROM CSV ----------------
 
-function getLastSavedDrawNumber() {
-  if (!fs.existsSync("data/Lotto.csv")) return 0;
+function loadLast1000Draws() {
+  if (!fs.existsSync("data/Lotto.csv")) {
+    throw new Error("Lotto.csv not found");
+  }
 
   const raw = fs.readFileSync("data/Lotto.csv", "utf8");
   const lines = raw.trim().split("\n");
 
-  if (lines.length === 0) return 0;
+  console.log("Total draws in CSV:", lines.length);
 
-  const lastLine = lines[lines.length - 1];
-  return Number(lastLine.split(",")[0]);
-}
+  const last1000 = lines.slice(-1000);
 
-// ---------------- APPEND TO CSV ----------------
-
-function appendDraw(draw) {
-  const line = `${draw.draw},${draw.date},${draw.main.join(",")},${draw.strong},0,0,\n`;
-  fs.appendFileSync("data/Lotto.csv", line);
-}
-
-// ---------------- SCRAPE FROM PAIS ----------------
-
-async function fetchLatestDraw() {
-  const browser = await puppeteer.launch({
-    headless: "new",
-    args: ["--no-sandbox", "--disable-setuid-sandbox"]
-  });
-
-  const page = await browser.newPage();
-  await page.goto("https://www.pais.co.il/lotto/", {
-    waitUntil: "networkidle2"
-  });
-
-  // מחכה לטעינת המספרים
-  await page.waitForTimeout(3000);
-
-  const result = await page.evaluate(() => {
-
-    // הכדורים האדומים
-    const balls = Array.from(
-      document.querySelectorAll(".results-area .ball, .results-area .red-ball")
-    ).map(el => Number(el.innerText.trim()))
-     .filter(n => !isNaN(n));
-
-    // הכדור החזק (כחול)
-    const strongBallEl =
-      document.querySelector(".results-area .blue-ball");
-
-    const strongBall = strongBallEl
-      ? Number(strongBallEl.innerText.trim())
-      : null;
-
-    // מספר הגרלה מתוך הטקסט
-    const match = document.body.innerText.match(/לוטו מס׳\s*(\d+)/);
-    const drawNumber = match ? Number(match[1]) : Date.now();
+  const parsed = last1000.map(line => {
+    const parts = line.split(",");
 
     return {
-      draw: drawNumber,
-      date: new Date().toLocaleDateString("he-IL"),
-      main: balls.slice(0, 6),
-      strong: strongBall
+      draw: Number(parts[0]),
+      date: parts[1],
+      main: [
+        Number(parts[2]),
+        Number(parts[3]),
+        Number(parts[4]),
+        Number(parts[5]),
+        Number(parts[6]),
+        Number(parts[7])
+      ],
+      strong: Number(parts[8])
     };
   });
 
-  await browser.close();
+  return parsed;
+}
 
-  if (!result.main || result.main.length < 6) {
-    throw new Error("Failed to scrape lotto numbers");
-  }
+// ---------------- GEMINI ----------------
 
-  return result;
+async function analyzeWithGemini(data) {
+
+  const prompt = `
+You are a professional lottery statistician.
+
+Analyze the following 1000 lottery draws.
+Provide short insights about:
+- Hot numbers
+- Cold numbers
+- Even/odd balance
+- Any noticeable patterns
+
+Data:
+${JSON.stringify(data)}
+`;
+
+  const response = await axios.post(
+    `https://generativelanguage.googleapis.com/v1/models/gemini-2.5-flash:generateContent?key=${GEMINI_API_KEY}`,
+    {
+      contents: [
+        {
+          parts: [{ text: prompt }]
+        }
+      ]
+    }
+  );
+
+  return response.data.candidates?.[0]?.content?.parts?.[0]?.text
+    || "No AI response.";
 }
 
 // ---------------- MAIN ----------------
 
 async function run() {
   try {
-    console.log("Checking latest lotto draw...");
+    console.log("Starting Lotto AI analysis...");
 
-    const latest = await fetchLatestDraw();
-    const lastSaved = getLastSavedDrawNumber();
+    const last1000 = loadLast1000Draws();
 
-    console.log("Latest draw:", latest.draw);
-    console.log("Last saved:", lastSaved);
+    await sendTelegram(
+      `📊 Analyzing ${last1000.length} historical draws`
+    );
 
-    if (latest.draw > lastSaved) {
+    const aiResult = await analyzeWithGemini(last1000);
 
-      appendDraw(latest);
+    await sendTelegram(
+      `🤖 AI Lotto Analysis:\n${aiResult}`
+    );
 
-      await sendTelegram(
-        `✅ New Lotto Draw Added\n\n` +
-        `Draw #${latest.draw}\n` +
-        `Numbers: ${latest.main.join(", ")}\n` +
-        `Strong: ${latest.strong}`
-      );
-
-      console.log("New draw saved.");
-
-    } else {
-
-      await sendTelegram("ℹ️ No new lotto draw.");
-      console.log("No new draw found.");
-
-    }
+    console.log("Analysis completed.");
 
   } catch (err) {
-    console.error(err);
-    await sendTelegram("❌ Failed to fetch lotto.");
+    console.error(err.response?.data || err.message);
+    await sendTelegram("❌ AI analysis failed.");
   }
 }
 
