@@ -1,28 +1,24 @@
-name: Lotto Job
+name: Lotto Weekly AI
 
 on:
-  workflow_dispatch:
   schedule:
-    - cron: "0 18 * * *" # כל יום 18:00 UTC (בישראל זה לרוב 20:00/21:00 תלוי שעון קיץ)
+    - cron: "0 7 * * 1,5"  # 07:00 UTC (10:00 ישראל בערך)
+  workflow_dispatch:
 
 jobs:
   run-job:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Checkout repo
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
-      - name: Setup Node
-        uses: actions/setup-node@v4
+      - uses: actions/setup-node@v4
         with:
           node-version: 20
 
-      - name: Install dependencies
-        run: npm install
+      - run: npm install
 
-      - name: Run Lotto Script
-        run: node src/job.js
+      - run: node src/job.js
         env:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
