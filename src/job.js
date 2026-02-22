@@ -22,6 +22,8 @@ const STRONG_MAX = 7;
 const WINDOW_LONG = 999;
 const WINDOW_SHORT = 100;
 
+const FORM_LINES = 8;
+
 // ====== HELPERS ======
 function findCsvPath() {
   for (const p of CSV_PATH_CANDIDATES) {
@@ -195,6 +197,111 @@ async function sendTelegram(text) {
   }
 }
 
+// ====== RECOMMENDATIONS (8 lines) ======
+function weightedPick(items) {
+  // items: [{ value, weight }]
+  const total = items.reduce((s, x) => s + x.weight, 0);
+  let r = Math.random() * total;
+  for (const it of items) {
+    r -= it.weight;
+    if (r <= 0) return it.value;
+  }
+  return items[items.length - 1].value;
+}
+
+function makeUniquePick(pool, pickedSet, maxTries = 50) {
+  for (let i = 0; i < maxTries; i++) {
+    const v = weightedPick(pool);
+    if (!pickedSet.has(v)) return v;
+  }
+  // fallback: first unused
+  for (const it of pool) {
+    if (!pickedSet.has(it.value)) return it.value;
+  }
+  return pool[0].value;
+}
+
+function buildWeightedMainPool(stats999, hotNums, riserNums) {
+  // weight = base + hotBoost + riserBoost + freqBoost
+  const pool = [];
+  for (let n = MAIN_MIN; n <= MAIN_MAX; n++) {
+    const freq = stats999.mainFreq[n] || 0;
+
+    let w = 1.0;
+    if (hotNums.has(n)) w += 2.0;      // חמים
+    if (riserNums.has(n)) w += 2.2;    // מתחממים (100 מול 999)
+    w += Math.min(1.2, freq / 150);    // בוסט קטן לפי תדירות (נרמול עדין)
+
+    pool.push({ value: n, weight: w });
+  }
+  return pool;
+}
+
+function buildWeightedStrongPool(stats100) {
+  // נותן עדיפות לחזק חם ב-100
+  const pool = [];
+  for (let s = STRONG_MIN; s <= STRONG_MAX; s++) {
+    const f = stats100.strongFreq[s] || 0;
+    const w = 1.0 + Math.min(2.0, f / 20); // בוסט לפי הופעות ב-100
+    pool.push({ value: s, weight: w });
+  }
+  return pool;
+}
+
+function bucketIndex(n) {
+  if (n <= 10) return 0;
+  if (n <= 20) return 1;
+  if (n <= 30) return 2;
+  return 3;
+}
+
+function generateFormLines(stats100, stats999, cmp) {
+  const hotNums = new Set(stats999.mainTop.map((x) => x.num));          // חמים לפי 999
+  const riserNums = new Set(cmp.risers.slice(0, 7).map((x) => x.num));  // מתחממים לפי 100 מול 999
+
+  const mainPool = buildWeightedMainPool(stats999, hotNums, riserNums);
+  const strongPool = buildWeightedStrongPool(stats100);
+
+  const lines = [];
+
+  for (let i = 0; i < FORM_LINES; i++) {
+    const picked = new Set();
+    const bucketsUsed = [0, 0, 0, 0];
+
+    // תכנון: 2 מהחמים/מתחממים (משוקלל), 2 מהאמצע, 2 מכללי — בפועל נבחר 6 דרך pool אבל עם פיזור טווחים
+    while (picked.size < 6) {
+      const n = makeUniquePick(mainPool, picked);
+
+      // enforce basic spread: לא יותר מ-2 מאותו טווח
+      const bi = bucketIndex(n);
+      if (bucketsUsed[bi] >= 2) {
+        // נסה שוב
+        continue;
+      }
+
+      picked.add(n);
+      bucketsUsed[bi] += 1;
+    }
+
+    const mainNums = [...picked].sort((a, b) => a - b);
+    const strong = weightedPick(strongPool);
+
+    lines.push({ mainNums, strong });
+  }
+
+  return lines;
+}
+
+function formatFormLines(lines) {
+  return lines
+    .map((l, idx) => {
+      const nums = l.mainNums.map((n) => String(n).padStart(2, "0")).join(" ");
+      return `${idx + 1}) ${nums} | חזק: ${l.strong}`;
+    })
+    .join("\n");
+}
+
+// ====== GEMINI SUMMARY ======
 async function geminiSummary({ stats100, stats999, cmp }) {
   if (!GEMINI_API_KEY) return null;
 
@@ -217,18 +324,15 @@ async function geminiSummary({ stats100, stats999, cmp }) {
 
   const prompt = `
 אתה אנליסט נתונים בכיר.
-יש סיכום סטטיסטי של תוצאות לוטו: חלון 100 הגרלות אחרונות מול חלון 999 אחרונות.
-מטרות:
-1) להסיק תובנה מקצועית על ההבדלים בין החלונות (תדירויות, פיזור טווחים, זוגי/אי־זוגי).
-2) לזהות מה התחמם ומה התקרר ב-100 האחרונים ביחס ל-999.
-3) ניסוח קצר, חד, “אליט”, ללא חפירות.
-פלט: 3–4 שורות בעברית בלבד.
+השווה בין 100 ההגרלות האחרונות לבין 999 האחרונות.
+מטרות: לזהות מגמה, התחממות/התקררות, פיזור טווחים וזוגי/אי-זוגי.
+פלט: 3–4 שורות בעברית בלבד, חדות ותמציתיות (בלי חפירות).
 
 דאטה (JSON):
 ${JSON.stringify(dataBrief)}
 `.trim();
 
-  const model = "gemini-2.5-flash-lite"; // אפשר להחליף ל: gemini-2.5-flash
+  const model = "gemini-2.5-flash-lite";
   const url =
     `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent` +
     `?key=${encodeURIComponent(GEMINI_API_KEY)}`;
@@ -294,6 +398,12 @@ async function main() {
     `🧊 <b>התקררו (100 מול 999)</b>: ${cmp.fallers.slice(0, 5).map((x) => `${x.num}(${(x.delta * 100).toFixed(2)}pp)`).join(", ")}`,
   ].join("\n");
 
+  // 🎟 טופס מומלץ (8 שורות)
+  const formLines = generateFormLines(stats100, stats999, cmp);
+  const formBlock =
+    `\n\n🎟 <b>טופס מומלץ (8 שורות)</b>\n` +
+    escapeHtml(formatFormLines(formLines));
+
   let aiText = null;
   try {
     aiText = await geminiSummary({ stats100, stats999, cmp });
@@ -307,7 +417,7 @@ async function main() {
       ? `\n\n🧠 <b>סיכום AI</b>\n${escapeHtml(aiText.trim())}`
       : `\n\n🧠 <b>סיכום AI</b>\nלא התקבל פלט מ-Gemini (בדוק GEMINI_API_KEY / הרשאות).`;
 
-  await sendTelegram(msgStats + aiBlock);
+  await sendTelegram(msgStats + formBlock + aiBlock);
 
   console.log("Done. Sent Telegram message.");
 }
