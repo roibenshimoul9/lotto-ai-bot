@@ -1,9 +1,9 @@
 import fs from "fs";
 import axios from "axios";
 
-// ==========================
-// 📦 קריאת היסטוריה בצורה בטוחה
-// ==========================
+/* ============================
+   📦 Load History Safely
+============================ */
 function loadHistory() {
   try {
     const data = fs.readFileSync("data/history.json", "utf-8");
@@ -14,64 +14,64 @@ function loadHistory() {
   }
 }
 
-// ==========================
-// 🤖 Gemini AI
-// ==========================
+/* ============================
+   🤖 Gemini AI Analysis
+============================ */
 async function analyzeWithGemini(history) {
   const apiKey = process.env.GEMINI_API_KEY;
 
   if (!apiKey) {
-    console.log("❌ Missing GEMINI_API_KEY");
-    return "Gemini API key not configured.";
+    return "❌ Gemini API key not configured.";
   }
 
   const prompt = `
-אתה אנליסט לוטו מקצועי.
+You are a professional lottery data analyst.
 
-נתח את ההיסטוריה הבאה:
-- מצא מספרים חמים
-- מצא מספרים קרים
-- נתח זוגי/אי זוגי
-- נתח פיזור טווחים
+Analyze this lottery history.
+Provide:
+- Hot numbers
+- Cold numbers
+- Pattern insights
+- Short prediction
 
-החזר תשובה קצרה וברורה.
+Return a short clear response.
 
-הנתונים:
+Data:
 ${JSON.stringify(history)}
 `;
 
   try {
     const response = await axios.post(
-      "https://generativelanguage.googleapis.com/v1/models/gemini-1.5-flash:generateContent",
+      `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${apiKey}`,
       {
         contents: [
-          { parts: [{ text: prompt }] }
+          {
+            parts: [{ text: prompt }]
+          }
         ]
-      },
-      {
-        headers: {
-          "Content-Type": "application/json",
-          "x-goog-api-key": apiKey
-        }
       }
     );
 
-    return response.data.candidates[0].content.parts[0].text;
+    return response.data.candidates?.[0]?.content?.parts?.[0]?.text
+      || "No AI response received.";
+
   } catch (error) {
-    console.log("❌ Gemini Error:", error.response?.data || error.message);
-    return "Gemini analysis failed.";
+    console.log("❌ Gemini Error:");
+    console.log(error.response?.data || error.message);
+
+    return "❌ Gemini analysis failed.";
   }
 }
 
-// ==========================
-// 📲 Telegram
-// ==========================
+/* ============================
+   📲 Telegram Sender
+============================ */
 async function sendToTelegram(message) {
   const token = process.env.TELEGRAM_BOT_TOKEN;
   const chatId = process.env.TELEGRAM_CHAT_ID;
 
   if (!token || !chatId) {
-    console.log("⚠️ Telegram not configured.");
+    console.log("⚠️ Telegram secrets missing.");
     return;
   }
 
@@ -82,26 +82,28 @@ async function sendToTelegram(message) {
       chat_id: chatId,
       text: message
     });
+
   } catch (err) {
-    console.log("❌ Telegram Error:", err.response?.data || err.message);
+    console.log("❌ Telegram Error:");
+    console.log(err.response?.data || err.message);
   }
 }
 
-// ==========================
-// 🚀 Run
-// ==========================
+/* ============================
+   🚀 Main Runner
+============================ */
 async function run() {
-  console.log("🚀 Starting Lotto AI Job...");
+  console.log("🚀 Lotto AI Job Started...");
 
   const history = loadHistory();
 
   const analysis = await analyzeWithGemini(history);
 
-  console.log("✅ AI Analysis Ready");
+  console.log("✅ Analysis complete.");
 
   await sendToTelegram(`🎯 AI Lotto Analysis:\n\n${analysis}`);
 
-  console.log("📤 Sent to Telegram");
+  console.log("📤 Sent to Telegram.");
 }
 
 run();
