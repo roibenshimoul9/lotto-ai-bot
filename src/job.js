@@ -300,23 +300,16 @@ async function main() {
   const stats100 = computeStats(last100);
   const cmp = compareWindows(stats100, stats999);
 
-  const last = rows[rows.length - 1];
-
-  // סטטיסטיקה תמציתית (לא AI)
+  // ===== הודעת סטטיסטיקה (ללא שעה וללא הגרלה אחרונה) =====
   const msgStats = [
     `🎯 <b>Lotto Weekly AI</b>`,
-    `📅 עדכון: ${new Date().toLocaleString("he-IL")}`,
-    ``,
-    `🧾 <b>אחרונה</b>: #${last.drawNo} (${last.dateStr}) | מספרים: ${last.nums.join(", ")} | חזק: ${last.strong}`,
     ``,
     `📊 <b>100 אחרונות</b> — חמים: ${formatTopList(stats100.mainTop, 5)} | קרים: ${formatTopList(stats100.mainCold, 5)}`,
     `⭐ <b>חזק (100)</b> — חמים: ${formatTopList(stats100.strongTop, 3)} | קרים: ${formatTopList(stats100.strongCold, 3)}`,
     `⚖️ <b>זוגי/אי־זוגי (100)</b>: ${(stats100.evenPct * 100).toFixed(1)}% / ${(stats100.oddPct * 100).toFixed(1)}%`,
-    `🧩 <b>פיזור טווחים (100)</b>: ${formatBuckets(stats100.buckets)}`,
     ``,
     `📈 <b>999 אחרונות</b> — חמים: ${formatTopList(stats999.mainTop, 5)} | קרים: ${formatTopList(stats999.mainCold, 5)}`,
     `⚖️ <b>זוגי/אי־זוגי (999)</b>: ${(stats999.evenPct * 100).toFixed(1)}% / ${(stats999.oddPct * 100).toFixed(1)}%`,
-    `🧩 <b>פיזור טווחים (999)</b>: ${formatBuckets(stats999.buckets)}`,
     ``,
     `🚀 <b>מה התחמם ב-100 מול 999</b>: ${cmp.risers.slice(0, 5).map((x) => `${x.num}(+${(x.delta * 100).toFixed(2)}pp)`).join(", ")}`,
     `🧊 <b>מה התקרר ב-100 מול 999</b>: ${cmp.fallers.slice(0, 5).map((x) => `${x.num}(${(x.delta * 100).toFixed(2)}pp)`).join(", ")}`,
@@ -326,12 +319,15 @@ async function main() {
   try {
     aiText = await geminiSummary({ stats100, stats999, cmp });
   } catch (e) {
-    console.log(String(e));
+    console.log("Gemini error:", String(e));
   }
 
-  const finalMessage = aiText
-    ? `${msgStats}\n\n🧠 <b>ניתוח AI (Gemini 2.5 Flash)</b>\n${escapeHtml(aiText)}`
-    : `${msgStats}\n\n🧠 <b>ניתוח AI</b>\n(לא זמין כרגע: חסר GEMINI_API_KEY או שהקריאה נכשלה)`;
+  // ===== בלוק AI מסודר ונקי בסוף =====
+  const aiBlock = aiText && aiText.trim().length > 0
+    ? `\n\n🧠 <b>ניתוח AI (Gemini 2.5 Flash)</b>\n${escapeHtml(aiText.trim())}`
+    : `\n\n🧠 <b>ניתוח AI</b>\nלא התקבל פלט מ-Gemini.`;
+
+  const finalMessage = msgStats + aiBlock;
 
   await sendTelegram(finalMessage);
 
