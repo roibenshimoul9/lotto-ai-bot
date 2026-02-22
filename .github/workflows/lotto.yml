@@ -2,17 +2,9 @@ name: Lotto Weekly AI
 
 on:
   workflow_dispatch:
-    inputs:
-      forceRun:
-        description: "Force run now (true/false)"
-        required: false
-        default: "false"
-
   schedule:
-    # GitHub cron is UTC:
-    # 06:00 UTC ~= 08:00 Israel (winter, UTC+2)
-    - cron: "0 6 * * 1"  # Monday
-    - cron: "0 6 * * 5"  # Friday
+    - cron: "0 6 * * 1"  # Monday (UTC)
+    - cron: "0 6 * * 5"  # Friday (UTC)
 
 jobs:
   run-job:
@@ -27,10 +19,9 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: 20
-          cache: "npm"
 
       - name: Install dependencies
-        run: npm ci
+        run: npm install
 
       - name: Run Lotto Script
         run: node src/job.js
@@ -38,5 +29,3 @@ jobs:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
-          # If your code blocks non-scheduled runs, you can use this:
-          FORCE_RUN: ${{ inputs.forceRun }}
