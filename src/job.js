@@ -1,36 +1,13 @@
+import fs from "fs";
 import axios from "axios";
+import { analyzeWithGemini } from "./gemini.js";
 
-// ===== הגרלת מספרים ללא כפילויות =====
-function drawUniqueNumbers(count, max) {
-  const numbers = new Set();
-
-  while (numbers.size < count) {
-    const num = Math.floor(Math.random() * max) + 1;
-    numbers.add(num);
-  }
-
-  return Array.from(numbers).sort((a, b) => a - b);
-}
-
-// ===== יצירת תוצאה =====
-function generateLotto() {
-  const main = drawUniqueNumbers(3, 37);
-  const strong = drawUniqueNumbers(3, 7);
-
-  return {
-    date: new Date().toISOString(),
-    mainNumbers: main,
-    strongNumbers: strong
-  };
-}
-
-// ===== שליחת טלגרם (אופציונלי) =====
 async function sendToTelegram(message) {
   const token = process.env.TELEGRAM_BOT_TOKEN;
   const chatId = process.env.TELEGRAM_CHAT_ID;
 
   if (!token || !chatId) {
-    console.log("Telegram not configured.");
+    console.log("Telegram not configured");
     return;
   }
 
@@ -42,21 +19,16 @@ async function sendToTelegram(message) {
   });
 }
 
-// ===== ריצה =====
 async function run() {
-  const result = generateLotto();
+  const history = JSON.parse(
+    fs.readFileSync("data/history.json", "utf-8")
+  );
 
-  console.log("Generated Lotto:");
-  console.log(JSON.stringify(result, null, 2));
+  const aiResult = await analyzeWithGemini(history);
 
-  const message = `
-🎯 Lotto Prediction
------------------------
-Main: ${result.mainNumbers.join(", ")}
-Strong: ${result.strongNumbers.join(", ")}
-`;
+  console.log(aiResult);
 
-  await sendToTelegram(message);
+  await sendToTelegram(`🎯 AI Lotto Analysis:\n\n${aiResult}`);
 }
 
 run();
