@@ -10,7 +10,7 @@ const GEMINI = process.env.GEMINI_API_KEY;
 const CSV_PATH = "data/lotto.csv";
 const MAX_NUMBER = 37;
 const MAX_STRONG = 7;
-const LAST_N = 1000;
+const KEEP_LAST = 1000;
 
 /* ================= TELEGRAM ================= */
 
@@ -20,6 +20,50 @@ async function send(text) {
     text,
     disable_web_page_preview: true
   });
+}
+
+/* ================= UPDATE LATEST DRAW ================= */
+
+async function updateWithLatestDraw() {
+  try {
+    console.log("Checking latest draw...");
+
+    const url = "https://www.pais.co.il/api/lotto/getLastResults";
+    const res = await axios.get(url);
+    const latest = res.data?.results?.[0];
+
+    if (!latest) return;
+
+    const drawId = latest.drawNumber;
+    const date = latest.drawDate;
+    const main = latest.regularNumbers;
+    const strong = latest.strongNumber;
+
+    if (!main || main.length !== 6) return;
+
+    let existing = "";
+    if (fs.existsSync(CSV_PATH)) {
+      existing = fs.readFileSync(CSV_PATH, "utf8");
+    }
+
+    if (existing.includes(drawId)) {
+      console.log("Draw already exists.");
+      return;
+    }
+
+    const newLine =
+      `${drawId},${date},${main.join(",")},${strong}\n`;
+
+    const combined = newLine + existing;
+    const lines = combined.split("\n").filter(Boolean).slice(0, KEEP_LAST);
+
+    fs.writeFileSync(CSV_PATH, lines.join("\n") + "\n");
+
+    console.log("Latest draw added.");
+
+  } catch (err) {
+    console.log("Update failed. Using existing CSV.");
+  }
 }
 
 /* ================= PARSE CSV ================= */
@@ -40,7 +84,7 @@ function parseCSV(csv) {
     }
   }
 
-  return draws.reverse().slice(0, LAST_N);
+  return draws.slice(0, KEEP_LAST);
 }
 
 /* ================= STATS ================= */
@@ -49,9 +93,9 @@ function computeStats(draws) {
 
   const freq = Array(MAX_NUMBER + 1).fill(0);
 
-  for (let d of draws) {
-    for (let n of d.main) freq[n]++;
-  }
+  for (let d of draws)
+    for (let n of d.main)
+      freq[n]++;
 
   const p = 6 / MAX_NUMBER;
   const expected = draws.length * p;
@@ -78,38 +122,33 @@ function computeStats(draws) {
 function generateLines(stats) {
 
   const lines = [];
+  const pool = [
+    ...stats.hot.map(x=>x.num),
+    ...stats.cold.map(x=>x.num)
+  ];
 
-  function balancedLine(pool) {
-
+  function balanced() {
     const set = new Set();
 
-    while (set.size < 6) {
-      const n = pool[Math.floor(Math.random() * pool.length)];
-      set.add(n);
-    }
+    while (set.size < 6)
+      set.add(pool[Math.floor(Math.random()*pool.length)]);
 
     const arr = [...set];
 
     const evens = arr.filter(n=>n%2===0).length;
     const lows = arr.filter(n=>n<=18).length;
 
-    if (evens < 2 || evens > 4) return balancedLine(pool);
-    if (lows < 2 || lows > 4) return balancedLine(pool);
+    if (evens < 2 || evens > 4) return balanced();
+    if (lows < 2 || lows > 4) return balanced();
 
     return arr.sort((a,b)=>a-b);
   }
 
-  const pool = [
-    ...stats.hot.map(x=>x.num),
-    ...stats.cold.map(x=>x.num)
-  ];
-
-  for (let i = 0; i < 8; i++) {
-
-    const nums = balancedLine(pool);
-    const strong = Math.floor(Math.random()*MAX_STRONG)+1;
-
-    lines.push({ nums, strong });
+  for (let i=0;i<8;i++) {
+    lines.push({
+      nums: balanced(),
+      strong: Math.floor(Math.random()*MAX_STRONG)+1
+    });
   }
 
   return lines;
@@ -126,28 +165,23 @@ async function aiAnalysis(stats) {
   const prompt = `
 אתה אנליסט סטטיסטי בכיר.
 
-בהתבסס על הנתונים:
 חמים: ${stats.hot.map(x=>x.num).join(", ")}
 קרים: ${stats.cold.map(x=>x.num).join(", ")}
 
-כתוב ניתוח אליטי תמציתי (3-5 שורות בלבד):
-- האם קיימת ריכוזיות?
-- האם יש סטייה מהתפלגות אקראית?
-- מה המשמעות הסטטיסטית?
-- הדגש שמדובר בניתוח ולא הבטחת זכייה.
+כתוב ניתוח אליטי תמציתי 3-5 שורות בלבד.
+הדגש שזה ניתוח נתונים ולא הבטחת זכייה.
 `;
 
-  const body = {
+  const res = await axios.post(url, {
     contents: [{ role: "user", parts: [{ text: prompt }] }]
-  };
+  });
 
-  const res = await axios.post(url, body);
   return res.data?.candidates?.[0]?.content?.parts?.[0]?.text;
 }
 
-/* ================= FORMAT MESSAGE ================= */
+/* ================= FORMAT ================= */
 
-function formatMessage(stats, lines, aiText) {
+function format(stats, lines, aiText) {
 
   let msg = "📊 ניתוח שבועי – לוטו ישראל\n\n";
 
@@ -176,6 +210,8 @@ function formatMessage(stats, lines, aiText) {
 
 async function main() {
 
+  await updateWithLatestDraw();
+
   const csv = fs.readFileSync(CSV_PATH,"utf8");
   const draws = parseCSV(csv);
 
@@ -183,11 +219,9 @@ async function main() {
   const lines = generateLines(stats);
   const aiText = await aiAnalysis(stats);
 
-  const message = formatMessage(stats, lines, aiText);
+  const message = format(stats, lines, aiText);
 
   await send(message);
 }
 
-main().catch(err=>{
-  console.error(err);
-});
+main().catch(console.error);
