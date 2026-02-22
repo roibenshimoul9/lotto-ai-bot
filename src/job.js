@@ -15,9 +15,9 @@ const CSV_PATH_CANDIDATES = [
 ];
 
 const MAIN_MIN = 1;
-const MAIN_MAX = 37;   // לוטו ישראלי בדרך כלל 1-37
+const MAIN_MAX = 37;
 const STRONG_MIN = 1;
-const STRONG_MAX = 7;  // "מספר חזק" 1-7
+const STRONG_MAX = 7;
 
 const WINDOW_LONG = 999;
 const WINDOW_SHORT = 100;
@@ -36,7 +36,7 @@ function safeInt(x) {
 }
 
 /**
- * ציפייה לשורה בפורמט (לפי מה שהראית):
+ * פורמט צפוי:
  * drawNo,date,n1,n2,n3,n4,n5,n6,strong,...
  */
 function parseCsvRows(csvText) {
@@ -57,7 +57,6 @@ function parseCsvRows(csvText) {
 
     if (!drawNo || nums.some((n) => n == null) || strong == null) continue;
 
-    // סינון טווחים בסיסי
     const inMainRange = nums.every((n) => n >= MAIN_MIN && n <= MAIN_MAX);
     const inStrongRange = strong >= STRONG_MIN && strong <= STRONG_MAX;
     if (!inMainRange || !inStrongRange) continue;
@@ -65,7 +64,6 @@ function parseCsvRows(csvText) {
     rows.push({ drawNo, dateStr, nums, strong });
   }
 
-  // מיון לפי מספר הגרלה עולה (ליתר ביטחון), ואז ניקח את האחרונים
   rows.sort((a, b) => a.drawNo - b.drawNo);
   return rows;
 }
@@ -83,8 +81,6 @@ function computeStats(rowsWindow) {
   let even = 0;
   let odd = 0;
 
-  // buckets ("עשירונים" / טווחים)
-  // 1-10, 11-20, 21-30, 31-37
   const buckets = [
     { name: "1-10", min: 1, max: 10, count: 0 },
     { name: "11-20", min: 11, max: 20, count: 0 },
@@ -125,7 +121,7 @@ function computeStats(rowsWindow) {
   const bucketSummary = buckets.map((b) => ({
     name: b.name,
     count: b.count,
-    pct: totalMainPicks ? (b.count / totalMainPicks) : 0,
+    pct: totalMainPicks ? b.count / totalMainPicks : 0,
   }));
 
   return {
@@ -137,39 +133,23 @@ function computeStats(rowsWindow) {
     mainCold: mainTB.bottom,
     strongTop: strongTB.top,
     strongCold: strongTB.bottom,
-    even,
-    odd,
     evenPct: totalMainPicks ? even / totalMainPicks : 0,
     oddPct: totalMainPicks ? odd / totalMainPicks : 0,
     buckets: bucketSummary,
-    lastDraw: rowsWindow[rowsWindow.length - 1] || null,
   };
 }
 
 function compareWindows(stats100, stats999) {
-  // השוואת תדירויות יחסיות (frequency / totalMainPicks)
-  const rel100 = {};
-  const rel999 = {};
-  for (let i = MAIN_MIN; i <= MAIN_MAX; i++) {
-    rel100[i] = stats100.totalMainPicks ? stats100.mainFreq[i] / stats100.totalMainPicks : 0;
-    rel999[i] = stats999.totalMainPicks ? stats999.mainFreq[i] / stats999.totalMainPicks : 0;
-  }
-
   const deltas = [];
   for (let i = MAIN_MIN; i <= MAIN_MAX; i++) {
-    deltas.push({
-      num: i,
-      delta: rel100[i] - rel999[i], // חיובי = חם יותר ב-100 האחרונים
-      r100: rel100[i],
-      r999: rel999[i],
-      c100: stats100.mainFreq[i],
-      c999: stats999.mainFreq[i],
-    });
+    const r100 = stats100.totalMainPicks ? stats100.mainFreq[i] / stats100.totalMainPicks : 0;
+    const r999 = stats999.totalMainPicks ? stats999.mainFreq[i] / stats999.totalMainPicks : 0;
+    deltas.push({ num: i, delta: r100 - r999 });
   }
 
   deltas.sort((a, b) => b.delta - a.delta);
-  const risers = deltas.slice(0, 7); // "עולים"
-  const fallers = [...deltas].reverse().slice(0, 7); // "יורדים"
+  const risers = deltas.slice(0, 7);
+  const fallers = [...deltas].reverse().slice(0, 7);
 
   return { risers, fallers };
 }
@@ -182,10 +162,11 @@ function formatTopList(list, maxItems = 5) {
 }
 
 function formatBuckets(buckets) {
-  // דוגמה: 1-10: 26% | 11-20: 24% ...
-  return buckets
-    .map((b) => `${b.name}: ${(b.pct * 100).toFixed(1)}%`)
-    .join(" | ");
+  return buckets.map((b) => `${b.name}: ${(b.pct * 100).toFixed(1)}%`).join(" | ");
+}
+
+function escapeHtml(s) {
+  return String(s).replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;");
 }
 
 async function sendTelegram(text) {
@@ -217,7 +198,6 @@ async function sendTelegram(text) {
 async function geminiSummary({ stats100, stats999, cmp }) {
   if (!GEMINI_API_KEY) return null;
 
-  // יוצרים “תמצית נתונים” קצרה שה-AI יוכל להסיק ממנה
   const dataBrief = {
     draws_100: stats100.totalDraws,
     draws_999: stats999.totalDraws,
@@ -231,32 +211,31 @@ async function geminiSummary({ stats100, stats999, cmp }) {
     even_odd_999: { evenPct: stats999.evenPct, oddPct: stats999.oddPct },
     buckets_100: stats100.buckets,
     buckets_999: stats999.buckets,
-    risers: cmp.risers.slice(0, 5).map((x) => ({ num: x.num, deltaPctPoints: (x.delta * 100).toFixed(2) })),
-    fallers: cmp.fallers.slice(0, 5).map((x) => ({ num: x.num, deltaPctPoints: (x.delta * 100).toFixed(2) })),
+    risers: cmp.risers.slice(0, 5).map((x) => ({ num: x.num, deltaPP: Number((x.delta * 100).toFixed(2)) })),
+    fallers: cmp.fallers.slice(0, 5).map((x) => ({ num: x.num, deltaPP: Number((x.delta * 100).toFixed(2)) })),
   };
 
   const prompt = `
 אתה אנליסט נתונים בכיר.
-קיבלת סיכום סטטיסטי של תוצאות לוטו: חלון 100 הגרלות אחרונות מול חלון 999 אחרונות.
+יש סיכום סטטיסטי של תוצאות לוטו: חלון 100 הגרלות אחרונות מול חלון 999 אחרונות.
 מטרות:
-1) להסיק תובנה מקצועית על ההבדלים בין החלונות (שינויים בתדירויות, פיזור עשירונים, זוגי/אי־זוגי).
-2) לזהות מה "התחמם" ומה "התקרר" ב-100 האחרונים ביחס לבייסליין של 999.
-3) לשמור על ניסוח חד, אליטיסטי, וללא חפירות.
-פלט: 3–4 שורות בעברית בלבד, תמציתיות מאוד.
+1) להסיק תובנה מקצועית על ההבדלים בין החלונות (תדירויות, פיזור טווחים, זוגי/אי־זוגי).
+2) לזהות מה התחמם ומה התקרר ב-100 האחרונים ביחס ל-999.
+3) ניסוח קצר, חד, “אליט”, ללא חפירות.
+פלט: 3–4 שורות בעברית בלבד.
+
 דאטה (JSON):
 ${JSON.stringify(dataBrief)}
 `.trim();
 
-  // Gemini 2.5 Flash
-  const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-lite:generateContent?key=${encodeURIComponent(GEMINI_API_KEY)}`;
-  )}`;
+  const model = "gemini-2.5-flash-lite"; // אפשר להחליף ל: gemini-2.5-flash
+  const url =
+    `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent` +
+    `?key=${encodeURIComponent(GEMINI_API_KEY)}`;
 
   const body = {
     contents: [{ role: "user", parts: [{ text: prompt }] }],
-    generationConfig: {
-      temperature: 0.35,
-      maxOutputTokens: 200,
-    },
+    generationConfig: { temperature: 0.35, maxOutputTokens: 220 },
   };
 
   const res = await fetch(url, {
@@ -289,7 +268,6 @@ async function main() {
 
   const csvText = fs.readFileSync(csvPath, "utf8");
   const rows = parseCsvRows(csvText);
-
   if (rows.length < 50) throw new Error(`Not enough rows parsed from CSV. Parsed=${rows.length}`);
 
   const last999 = rows.slice(-Math.min(WINDOW_LONG, rows.length));
@@ -299,19 +277,21 @@ async function main() {
   const stats100 = computeStats(last100);
   const cmp = compareWindows(stats100, stats999);
 
-  // ===== הודעת סטטיסטיקה (ללא שעה וללא הגרלה אחרונה) =====
+  // ✅ בלי שעה, בלי “הגרלה אחרונה”
   const msgStats = [
     `🎯 <b>Lotto Weekly AI</b>`,
     ``,
     `📊 <b>100 אחרונות</b> — חמים: ${formatTopList(stats100.mainTop, 5)} | קרים: ${formatTopList(stats100.mainCold, 5)}`,
     `⭐ <b>חזק (100)</b> — חמים: ${formatTopList(stats100.strongTop, 3)} | קרים: ${formatTopList(stats100.strongCold, 3)}`,
     `⚖️ <b>זוגי/אי־זוגי (100)</b>: ${(stats100.evenPct * 100).toFixed(1)}% / ${(stats100.oddPct * 100).toFixed(1)}%`,
+    `🧩 <b>פיזור טווחים (100)</b>: ${formatBuckets(stats100.buckets)}`,
     ``,
     `📈 <b>999 אחרונות</b> — חמים: ${formatTopList(stats999.mainTop, 5)} | קרים: ${formatTopList(stats999.mainCold, 5)}`,
     `⚖️ <b>זוגי/אי־זוגי (999)</b>: ${(stats999.evenPct * 100).toFixed(1)}% / ${(stats999.oddPct * 100).toFixed(1)}%`,
+    `🧩 <b>פיזור טווחים (999)</b>: ${formatBuckets(stats999.buckets)}`,
     ``,
-    `🚀 <b>מה התחמם ב-100 מול 999</b>: ${cmp.risers.slice(0, 5).map((x) => `${x.num}(+${(x.delta * 100).toFixed(2)}pp)`).join(", ")}`,
-    `🧊 <b>מה התקרר ב-100 מול 999</b>: ${cmp.fallers.slice(0, 5).map((x) => `${x.num}(${(x.delta * 100).toFixed(2)}pp)`).join(", ")}`,
+    `🚀 <b>התחממו (100 מול 999)</b>: ${cmp.risers.slice(0, 5).map((x) => `${x.num}(+${(x.delta * 100).toFixed(2)}pp)`).join(", ")}`,
+    `🧊 <b>התקררו (100 מול 999)</b>: ${cmp.fallers.slice(0, 5).map((x) => `${x.num}(${(x.delta * 100).toFixed(2)}pp)`).join(", ")}`,
   ].join("\n");
 
   let aiText = null;
@@ -321,24 +301,15 @@ async function main() {
     console.log("Gemini error:", String(e));
   }
 
-  // ===== בלוק AI מסודר ונקי בסוף =====
-  const aiBlock = aiText && aiText.trim().length > 0
-    ? `\n\n🧠 <b>ניתוח AI (Gemini 2.5 Flash)</b>\n${escapeHtml(aiText.trim())}`
-    : `\n\n🧠 <b>ניתוח AI</b>\nלא התקבל פלט מ-Gemini.`;
+  // ✅ AI תמיד בסוף
+  const aiBlock =
+    aiText && aiText.trim().length > 0
+      ? `\n\n🧠 <b>סיכום AI</b>\n${escapeHtml(aiText.trim())}`
+      : `\n\n🧠 <b>סיכום AI</b>\nלא התקבל פלט מ-Gemini (בדוק GEMINI_API_KEY / הרשאות).`;
 
-  const finalMessage = msgStats + aiBlock;
-
-  await sendTelegram(finalMessage);
+  await sendTelegram(msgStats + aiBlock);
 
   console.log("Done. Sent Telegram message.");
-}
-
-function escapeHtml(s) {
-  // כדי שלא יתפוצץ parse_mode=HTML
-  return String(s)
-    .replaceAll("&", "&amp;")
-    .replaceAll("<", "&lt;")
-    .replaceAll(">", "&gt;");
 }
 
 main().catch((err) => {
