@@ -8,19 +8,16 @@ function loadHistory() {
   try {
     const data = fs.readFileSync("data/history.json", "utf-8");
     return JSON.parse(data);
-  } catch (err) {
-    console.log("History load error:", err.message);
+  } catch {
     return [];
   }
 }
 
 /* ============================
-   Gemini AI
+   Gemini AI (API v1 + model current)
 ============================ */
 async function analyzeWithGemini(history) {
   const apiKey = process.env.GEMINI_API_KEY;
-
-  console.log("Gemini key exists?", !!apiKey);
 
   if (!apiKey) {
     return "❌ Gemini API key not configured.";
@@ -28,7 +25,12 @@ async function analyzeWithGemini(history) {
 
   const prompt = `
 You are a professional lottery analyst.
-Analyze the data briefly.
+
+Analyze this lottery history and provide:
+- Hot numbers
+- Cold numbers
+- Pattern insight
+- Short prediction
 
 Data:
 ${JSON.stringify(history)}
@@ -36,7 +38,7 @@ ${JSON.stringify(history)}
 
   try {
     const response = await axios.post(
-      `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${apiKey}`,
+      `https://generativelanguage.googleapis.com/v1/models/gemini-1.5-pro:generateContent?key=${apiKey}`,
       {
         contents: [
           {
@@ -46,19 +48,13 @@ ${JSON.stringify(history)}
       }
     );
 
-    console.log("Gemini success");
-
     return response.data.candidates?.[0]?.content?.parts?.[0]?.text
       || "No AI response.";
 
   } catch (error) {
-
-    console.log("========== GEMINI ERROR ==========");
-    console.log(error.response?.status);
-    console.log(JSON.stringify(error.response?.data, null, 2));
-    console.log("==================================");
-
-    return "❌ Gemini failed. Check GitHub logs.";
+    console.log("Gemini error:");
+    console.log(error.response?.data || error.message);
+    return "❌ Gemini analysis failed.";
   }
 }
 
@@ -69,13 +65,14 @@ async function sendToTelegram(message) {
   const token = process.env.TELEGRAM_BOT_TOKEN;
   const chatId = process.env.TELEGRAM_CHAT_ID;
 
-  const url = `https://api.telegram.org/bot${token}/sendMessage`;
-
   try {
-    await axios.post(url, {
-      chat_id: chatId,
-      text: message
-    });
+    await axios.post(
+      `https://api.telegram.org/bot${token}/sendMessage`,
+      {
+        chat_id: chatId,
+        text: message
+      }
+    );
   } catch (err) {
     console.log("Telegram error:", err.response?.data || err.message);
   }
@@ -90,7 +87,7 @@ async function run() {
   const history = loadHistory();
   const analysis = await analyzeWithGemini(history);
 
-  await sendToTelegram(`AI Lotto Analysis:\n\n${analysis}`);
+  await sendToTelegram(`🎯 AI Lotto Analysis:\n\n${analysis}`);
 }
 
 run();
