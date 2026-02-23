@@ -4,6 +4,7 @@ import path from "path";
 
 const TELEGRAM_BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN;
 const TELEGRAM_CHAT_ID = process.env.TELEGRAM_CHAT_ID;
+const TELEGRAM_GROUP_ID = process.env.TELEGRAM_GROUP_ID;
 const GEMINI_API_KEY = process.env.GEMINI_API_KEY;
 
 // ====== CONFIG ======
