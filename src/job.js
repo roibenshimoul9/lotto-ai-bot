@@ -173,28 +173,37 @@ function escapeHtml(s) {
 }
 
 async function sendTelegram(text) {
-  if (!TELEGRAM_BOT_TOKEN || !TELEGRAM_CHAT_ID) {
-    console.log("Telegram not configured (missing TELEGRAM_BOT_TOKEN / TELEGRAM_CHAT_ID).");
+  if (!TELEGRAM_BOT_TOKEN) {
+    console.log("Missing TELEGRAM_BOT_TOKEN");
     return;
   }
 
+  const targets = [
+    TELEGRAM_CHAT_ID,
+    TELEGRAM_GROUP_ID
+  ].filter(Boolean);
+
   const url = `https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage`;
-  const payload = {
-    chat_id: TELEGRAM_CHAT_ID,
-    text,
-    parse_mode: "HTML",
-    disable_web_page_preview: true,
-  };
 
-  const res = await fetch(url, {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify(payload),
-  });
+  for (const chat_id of targets) {
+    const res = await fetch(url, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        chat_id,
+        text,
+        parse_mode: "HTML",
+        disable_web_page_preview: true,
+      }),
+    });
 
-  if (!res.ok) {
-    const t = await res.text().catch(() => "");
-    throw new Error(`Telegram send failed: ${res.status} ${t}`);
+    const data = await res.json();
+
+    if (!data.ok) {
+      console.error("Telegram send failed:", chat_id, data);
+    } else {
+      console.log("Sent to:", chat_id);
+    }
   }
 }
 
