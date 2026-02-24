@@ -27,7 +27,7 @@ const WINDOW_SHORT = 100;
 
 const FORM_LINES = 8;
 
-// ✅ שינוי 1: URL של lotto365
+// ✅ URL של lotto365
 const LOTTO_URL = "https://lotto365.co.il/תוצאות-הלוטו/";
 
 // ====== HELPERS ======
@@ -76,8 +76,7 @@ function parseCsvRows(csvText) {
   return rows;
 }
 
-// ====== 🔥 FETCH LATEST DRAW FROM SITE ======
-// ✅ שינוי 2: חילוץ מותאם ל-lotto365 (לא משנה שום דבר אחר בקובץ)
+// ====== 🔥 FETCH LATEST DRAW FROM lotto365 ======
 async function fetchLatestDrawFromSite() {
   const res = await fetch(LOTTO_URL, {
     headers: {
@@ -96,9 +95,13 @@ async function fetchLatestDrawFromSite() {
 
   const pageText = $.text().replace(/\s+/g, " ").trim();
 
-  const drawNoMatch = pageText.match(/תוצאות\s+הגרלת\s+לוטו\s+מס[׳']?\s*(\d+)/);
+  // מספר הגרלה (אם הטקסט השתנה, עדיין ננסה למצוא מספר 4 ספרות)
+  const drawNoMatch =
+    pageText.match(/תוצאות\s+הגרלת\s+לוטו\s+מס[׳']?\s*(\d+)/) ||
+    pageText.match(/\bמס[׳']?\s*(\d{3,5})\b/);
   const drawNo = drawNoMatch ? Number(drawNoMatch[1]) : null;
 
+  // ניסיון לזהות 6 מספרים + חזק מתוך הטקסט
   const numsAll = (pageText.match(/\b\d{1,2}\b/g) || []).map((x) => Number(x));
 
   let main = null;
@@ -120,10 +123,14 @@ async function fetchLatestDrawFromSite() {
     }
   }
 
-  // 🏆 חילוץ פרסים
+  // 🏆 חילוץ פרסים (אם לא נמצא — נשאיר null)
   const prize1Match = pageText.match(/פרס ראשון.*?([\d,]+)\s*₪.*?(\d+)\s*זוכ/);
   const prize2Match = pageText.match(/פרס שני.*?([\d,]+)\s*₪.*?(\d+)\s*זוכ/);
-  const totalPrizesMatch = pageText.match(/סה.?כ.*?([\d,]+)\s*₪/);
+
+  // זה יכול לתפוס גם סכומים אחרים, אבל עדיף מכלום
+  const totalPrizesMatch =
+    pageText.match(/סך\s*ה(?:פרסים)?\s*(?:שחולקו)?\s*[:\-]?\s*([\d,]+)\s*₪/) ||
+    pageText.match(/סה.?כ.*?([\d,]+)\s*₪/);
 
   const prize1Amount = prize1Match ? prize1Match[1] : null;
   const prize1Winners = prize1Match ? prize1Match[2] : null;
@@ -151,7 +158,8 @@ async function fetchLatestDrawFromSite() {
 }
 
 function appendDrawToCsv(csvPath, draw) {
-  const line = [draw.drawNo, draw.dateStr, ...draw.nums, draw.strong].join(",") + "\n";
+  const line =
+    [draw.drawNo, draw.dateStr, ...draw.nums, draw.strong].join(",") + "\n";
   fs.appendFileSync(csvPath, line);
 }
 
@@ -479,21 +487,21 @@ async function main() {
 
   const lastDrawRow = rows[rows.length - 1];
 
-  // ✅ תמיד שולחים בלוק ההגרלה האחרונה + סימון אם חדשה
-const drawBlock =
-  (isNewDraw ? `🚨 <b>הגרלה חדשה!</b>\n\n` : `🎰 <b>הגרלה אחרונה</b>\n\n`) +
-  `מספר הגרלה: <b>${lastDrawRow.drawNo}</b>\n` +
-  `מספרים: ${lastDrawRow.nums.join(", ")}\n` +
-  `חזק: ${lastDrawRow.strong}\n` +
-  (latestFromSite?.prize1Amount
-    ? `\n🥇 פרס ראשון: ${latestFromSite.prize1Amount} ₪ | זוכים: ${latestFromSite.prize1Winners || "0"}`
-    : "") +
-  (latestFromSite?.prize2Amount
-    ? `\n🥈 פרס שני: ${latestFromSite.prize2Amount} ₪ | זוכים: ${latestFromSite.prize2Winners || "0"}`
-    : "") +
-  (latestFromSite?.totalPrizes
-    ? `\n💰 סך פרסים שחולקו: ${latestFromSite.totalPrizes} ₪`
-    : "");
+  // ✅ בלוק ההגרלה האחרונה + פרסים (אם קיימים)
+  const drawBlock =
+    (isNewDraw ? `🚨 <b>הגרלה חדשה!</b>\n\n` : `🎰 <b>הגרלה אחרונה</b>\n\n`) +
+    `מספר הגרלה: <b>${lastDrawRow.drawNo}</b>\n` +
+    `מספרים: ${lastDrawRow.nums.join(", ")}\n` +
+    `חזק: ${lastDrawRow.strong}\n` +
+    (latestFromSite?.prize1Amount
+      ? `\n🥇 פרס ראשון: ${latestFromSite.prize1Amount} ₪ | זוכים: ${latestFromSite.prize1Winners || "0"}`
+      : "") +
+    (latestFromSite?.prize2Amount
+      ? `\n🥈 פרס שני: ${latestFromSite.prize2Amount} ₪ | זוכים: ${latestFromSite.prize2Winners || "0"}`
+      : "") +
+    (latestFromSite?.totalPrizes
+      ? `\n💰 סך פרסים שחולקו: ${latestFromSite.totalPrizes} ₪`
+      : "");
 
   const last999 = rows.slice(-Math.min(WINDOW_LONG, rows.length));
   const last100 = rows.slice(-Math.min(WINDOW_SHORT, rows.length));
@@ -525,7 +533,9 @@ const drawBlock =
   ].join("\n");
 
   const formLines = generateFormLines(stats100, stats999, cmp);
-  const formBlock = `\n\n🎟 <b>טופס מומלץ (${FORM_LINES} שורות)</b>\n` + escapeHtml(formatFormLines(formLines));
+  const formBlock =
+    `\n\n🎟 <b>טופס מומלץ (${FORM_LINES} שורות)</b>\n` +
+    escapeHtml(formatFormLines(formLines));
 
   let aiText = null;
   try {
