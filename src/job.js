@@ -78,59 +78,42 @@ function parseCsvRows(csvText) {
 
 // ====== 🔥 FETCH LATEST DRAW FROM lotto365 ======
 async function fetchLatestDrawFromSite() {
-  const url = "https://lotto365.co.il/תוצאות-הלוטו/";
+  const url = "https://lotto365.co.il/feed/";
 
   const res = await fetch(url, {
     headers: {
       "user-agent": "Mozilla/5.0",
-      "accept-language": "he-IL,he;q=0.9,en;q=0.8",
     },
   });
 
   if (!res.ok) {
-    throw new Error("Failed to fetch lotto365 page");
+    throw new Error("Failed to fetch lotto365 RSS");
   }
 
-  const html = await res.text();
-  const $ = cheerio.load(html);
+  const xml = await res.text();
 
-  // ===== מספרי הלוטו (העיגולים העליונים) =====
-  const nums = [];
-
-  $(".jet-listing-dynamic-field__content")
-    .slice(0, 6)
-    .each((i, el) => {
-      const n = Number($(el).text().trim());
-      if (n) nums.push(n);
-    });
-
-  if (nums.length < 6) {
-    throw new Error("Could not extract 6 main numbers");
-  }
-
-  // ===== חזק (העיגול הכחול) =====
-  const strong = Number(
-    $(".jet-listing-dynamic-field__content")
-      .eq(6)
-      .text()
-      .trim()
-  );
-
-  // ===== מספר הגרלה =====
-  const pageText = $("body").text();
-  const match = pageText.match(/תוצאות הגרלת לוטו מס[^\d]*(\d+)/);
+  const match = xml.match(/תוצאות הגרלת לוטו מס[^\d]*(\d+)[^<]*([\d,\s]+)/);
 
   if (!match) {
-    throw new Error("Draw number not found on page");
+    throw new Error("Could not extract draw from RSS");
   }
 
   const drawNo = Number(match[1]);
 
+  const nums = match[2]
+    .split(",")
+    .map((x) => Number(x.trim()))
+    .filter(Boolean);
+
+  if (nums.length < 7) {
+    throw new Error("Invalid numbers extracted from RSS");
+  }
+
   return {
     drawNo,
     dateStr: "",
-    nums,
-    strong,
+    nums: nums.slice(0, 6),
+    strong: nums[6],
     prize1Amount: null,
     prize1Winners: null,
     prize2Amount: null,
@@ -138,7 +121,6 @@ async function fetchLatestDrawFromSite() {
     totalPrizes: null,
   };
 }
-
 function appendDrawToCsv(csvPath, draw) {
   const line =
     [draw.drawNo, draw.dateStr, ...draw.nums, draw.strong].join(",") + "\n";
