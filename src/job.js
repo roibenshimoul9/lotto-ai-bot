@@ -81,7 +81,7 @@ async function fetchLatestDrawFromSite() {
   const res = await fetch(LOTTO_URL, {
     headers: {
       "user-agent":
-        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
       "accept-language": "he-IL,he;q=0.9,en-US;q=0.8,en;q=0.7",
     },
   });
@@ -92,45 +92,52 @@ async function fetchLatestDrawFromSite() {
 
   const html = await res.text();
   const $ = cheerio.load(html);
-
   const pageText = $.text().replace(/\s+/g, " ").trim();
 
-  // מספר הגרלה (אם הטקסט השתנה, עדיין ננסה למצוא מספר 4 ספרות)
-  const drawNoMatch =
-    pageText.match(/תוצאות\s+הגרלת\s+לוטו\s+מס[׳']?\s*(\d+)/) ||
-    pageText.match(/\bמס[׳']?\s*(\d{3,5})\b/);
+  // מספר הגרלה
+  const drawNoMatch = pageText.match(/תוצאות\s+הגרלת\s+לוטו\s+מס[׳']?\s*(\d+)/);
   const drawNo = drawNoMatch ? Number(drawNoMatch[1]) : null;
 
-  // ניסיון לזהות 6 מספרים + חזק מתוך הטקסט
-  const numsAll = (pageText.match(/\b\d{1,2}\b/g) || []).map((x) => Number(x));
+  // ====== 🎯 מציאת data-id לפי צבע מתוך <style> ======
+  // מחפשים ב-CSS את ה-elementor-element-XXXXXXX שיש לו background כחול (#33B5F7)
+  const styleText = $("style").text();
 
-  let main = null;
-  let strong = null;
+  const strongIdFromCss =
+    styleText.match(/elementor-element-([a-f0-9]{5,10})[\s\S]{0,120}?jet-listing-dynamic-field__content[\s\S]{0,200}?background:\s*#33b5f7/i)?.[1] ||
+    null;
 
-  for (let i = 0; i <= numsAll.length - 7; i++) {
-    const seg = numsAll.slice(i, i + 7);
-    const first6 = seg.slice(0, 6);
-    const last1 = seg[6];
+  const mainIdFromCss =
+    styleText.match(/elementor-element-([a-f0-9]{5,10})[\s\S]{0,120}?jet-listing-dynamic-field__content[\s\S]{0,200}?background:\s*#ff5733/i)?.[1] ||
+    null;
 
-    const okMain = first6.every((n) => n >= MAIN_MIN && n <= MAIN_MAX);
-    const unique6 = new Set(first6).size === 6;
-    const okStrong = last1 >= STRONG_MIN && last1 <= STRONG_MAX;
+  // Fallbackים לפי מה שראית בדפדפן (אם ה-CSS לא נתפס)
+  const STRONG_FALLBACK_ID = "281599c";
+  const MAIN_FALLBACK_ID = "562e6d3";
 
-    if (okMain && unique6 && okStrong) {
-      main = first6;
-      strong = last1;
-      break;
-    }
-  }
+  const strongDataId = strongIdFromCss || STRONG_FALLBACK_ID;
+  const mainDataId = mainIdFromCss || MAIN_FALLBACK_ID;
 
-  // 🏆 חילוץ פרסים (אם לא נמצא — נשאיר null)
-  const prize1Match = pageText.match(/פרס ראשון.*?([\d,]+)\s*₪.*?(\d+)\s*זוכ/);
-  const prize2Match = pageText.match(/פרס שני.*?([\d,]+)\s*₪.*?(\d+)\s*זוכ/);
+  // ====== ✅ חילוץ 6 המספרים הכתומים (רגילים) ======
+  const mainNums = $(`[data-id="${mainDataId}"] .jet-listing-dynamic-field__content`)
+    .map((_, el) => $(el).text().trim())
+    .get()
+    .filter((t) => /^\d{1,2}$/.test(t))
+    .map((t) => Number(t))
+    .filter((n) => n >= MAIN_MIN && n <= MAIN_MAX)
+    .slice(0, 6);
 
-  // זה יכול לתפוס גם סכומים אחרים, אבל עדיף מכלום
-  const totalPrizesMatch =
-    pageText.match(/סך\s*ה(?:פרסים)?\s*(?:שחולקו)?\s*[:\-]?\s*([\d,]+)\s*₪/) ||
-    pageText.match(/סה.?כ.*?([\d,]+)\s*₪/);
+  // ====== ✅ חילוץ המספר הכחול (חזק) ======
+  const strongText = $(`[data-id="${strongDataId}"] .jet-listing-dynamic-field__content`)
+    .first()
+    .text()
+    .trim();
+
+  const strong = /^\d{1,2}$/.test(strongText) ? Number(strongText) : null;
+
+  // ====== פרסים (כמו שהיה אצלך) ======
+  const prize1Match = pageText.match(/פרס ראשון.*?([\d,]+)\s*₪.*?(\d+|לא\s*חולק)\s*זוכ/);
+  const prize2Match = pageText.match(/פרס שני.*?([\d,]+)\s*₪.*?(\d+|לא\s*חולק)\s*זוכ/);
+  const totalPrizesMatch = pageText.match(/ס[הך]"?כ.*?([\d,]+)\s*₪/);
 
   const prize1Amount = prize1Match ? prize1Match[1] : null;
   const prize1Winners = prize1Match ? prize1Match[2] : null;
@@ -140,14 +147,22 @@ async function fetchLatestDrawFromSite() {
 
   const totalPrizes = totalPrizesMatch ? totalPrizesMatch[1] : null;
 
-  if (!drawNo || !main || strong == null) {
-    throw new Error("Failed extracting lotto results from lotto365");
+  // בדיקות תקינות
+  const unique6 = new Set(mainNums).size === 6;
+  const okStrong = strong != null && strong >= STRONG_MIN && strong <= STRONG_MAX;
+
+  if (!drawNo || mainNums.length !== 6 || !unique6 || !okStrong) {
+    throw new Error(
+      `Failed extracting lotto results from lotto365 (drawNo=${drawNo}, main=${mainNums.join(
+        ","
+      )}, strong=${strong}, mainDataId=${mainDataId}, strongDataId=${strongDataId})`
+    );
   }
 
   return {
     drawNo,
     dateStr: new Date().toISOString().slice(0, 10),
-    nums: main,
+    nums: mainNums,
     strong,
     prize1Amount,
     prize1Winners,
@@ -156,7 +171,6 @@ async function fetchLatestDrawFromSite() {
     totalPrizes,
   };
 }
-
 function appendDrawToCsv(csvPath, draw) {
   const line =
     [draw.drawNo, draw.dateStr, ...draw.nums, draw.strong].join(",") + "\n";
