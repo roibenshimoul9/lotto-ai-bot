@@ -81,7 +81,6 @@ function parseCsvRows(csvText) {
 async function fetchLatestDrawFromSite() {
   const res = await fetch(LOTTO_URL, {
     headers: {
-      // חשוב כדי לא לקבל HTML "ריק" / חסום
       "user-agent":
         "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
       "accept-language": "he-IL,he;q=0.9,en-US;q=0.8,en;q=0.7",
@@ -93,25 +92,39 @@ async function fetchLatestDrawFromSite() {
   }
 
   const html = await res.text();
-  const $ = cheerio.load(html);
 
-  const pageText = $.text().replace(/\s+/g, " ").trim();
+  // 1) חותכים רק את אזור "תוצאות הגרלת הלוטו" (בלי אקסטרה)
+  const startIdx = html.indexOf("תוצאות הגרלת הלוטו");
+  if (startIdx === -1) throw new Error("Could not find lotto section start");
 
-  // 1) מספר הגרלה (לפי הטקסט שמופיע באתר: "תוצאות הגרלת לוטו מס' 3901")
-  const drawNoMatch = pageText.match(/תוצאות\s+הגרלת\s+לוטו\s+מס[׳']?\s*(\d+)/);
+  let endIdx = html.indexOf("תוצאות הגרלת האקסטרה", startIdx);
+  if (endIdx === -1) endIdx = html.indexOf("האקסטרה", startIdx); // fallback רך
+  if (endIdx === -1) endIdx = Math.min(html.length, startIdx + 20000);
+
+  const lottoSectionHtml = html.slice(startIdx, endIdx);
+
+  const $ = cheerio.load(lottoSectionHtml);
+
+  // 2) מספר הגרלה מתוך הטקסט של הקטע
+  const sectionText = $.text().replace(/\s+/g, " ").trim();
+  const drawNoMatch =
+    sectionText.match(/מס[׳']?\s*(\d{3,5})/) ||
+    sectionText.match(/לוטו\s+מס[׳']?\s*(\d{3,5})/);
   const drawNo = drawNoMatch ? Number(drawNoMatch[1]) : null;
 
-  // 2) חיתוך איזור "קרוב" למספר ההגרלה כדי למצוא שם את הכדורים
-  let around = pageText;
-  if (drawNoMatch?.index != null) {
-    around = pageText.slice(drawNoMatch.index, drawNoMatch.index + 1200);
-  }
+  // 3) חילוץ מספרים מתוך האלמנטים הדינמיים (כאן אין אקסטרה כבר)
+  const nums = [];
+  $(".jet-listing-dynamic-field__content").each((_, el) => {
+    const t = $(el).text().trim();
+    if (/^\d{1,2}$/.test(t)) nums.push(Number(t));
+  });
 
-  // 3) ניסיון חילוץ מספרים מהטקסט הקרוב
-  //    (לרוב המספרים מופיעים שם ברצף)
-  const numsAll = (around.match(/\b\d{1,2}\b/g) || []).map((x) => Number(x));
+  // אם לא מספיק — fallback: לחלץ מספרים מכל הטקסט בקטע
+  const numsAll = nums.length
+    ? nums
+    : (sectionText.match(/\b\d{1,2}\b/g) || []).map((x) => Number(x));
 
-  // סריקה למציאת רצף שמתאים ל: 6 מספרים 1-37 (ייחודיים) + חזק 1-7
+  // 4) מוצאים רצף תקין: 6 (1-37 ייחודיים) + חזק (1-7)
   let main = null;
   let strong = null;
 
@@ -131,33 +144,10 @@ async function fetchLatestDrawFromSite() {
     }
   }
 
-  // 4) אם לא הצליח מהטקסט, ננסה גם חילוץ מה-HTML עצמו (fallback),
-  //    זה מכסה מצב שהמספרים לא מופיעים יפה ב-text.
-  if (!main || strong == null) {
-    const htmlNums = (html.match(/>\\s*(\\d{1,2})\\s*</g) || [])
-      .map((m) => m.replace(/[^\d]/g, ""))
-      .map((x) => Number(x))
-      .filter((n) => Number.isFinite(n));
-
-    for (let i = 0; i <= htmlNums.length - 7; i++) {
-      const seg = htmlNums.slice(i, i + 7);
-      const first6 = seg.slice(0, 6);
-      const last1 = seg[6];
-
-      const okMain = first6.every((n) => n >= MAIN_MIN && n <= MAIN_MAX);
-      const unique6 = new Set(first6).size === 6;
-      const okStrong = last1 >= STRONG_MIN && last1 <= STRONG_MAX;
-
-      if (okMain && unique6 && okStrong) {
-        main = first6;
-        strong = last1;
-        break;
-      }
-    }
-  }
-
   if (!drawNo || !main || strong == null) {
-    throw new Error("Failed extracting lotto results from lotto365");
+    throw new Error(
+      `Failed extracting lotto results from lotto365 (drawNo=${drawNo}, numsFound=${numsAll.length})`
+    );
   }
 
   return {
@@ -167,7 +157,6 @@ async function fetchLatestDrawFromSite() {
     strong,
   };
 }
-
 function appendDrawToCsv(csvPath, draw) {
   const line = [draw.drawNo, draw.dateStr, ...draw.nums, draw.strong].join(",") + "\n";
   fs.appendFileSync(csvPath, line);
