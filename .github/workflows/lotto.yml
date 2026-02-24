@@ -14,6 +14,8 @@ jobs:
     steps:
       - name: Checkout repo
         uses: actions/checkout@v4
+        with:
+          persist-credentials: true
 
       - name: Setup Node
         uses: actions/setup-node@v4
@@ -30,3 +32,17 @@ jobs:
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
           TELEGRAM_GROUP_ID: ${{ secrets.TELEGRAM_GROUP_ID }}
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+
+      # 🔥 חדש – commit אם CSV השתנה
+      - name: Commit updated lotto CSV if changed
+        run: |
+          git config user.name "lotto-bot"
+          git config user.email "bot@github.com"
+
+          if git diff --quiet; then
+            echo "No changes to commit"
+          else
+            git add .
+            git commit -m "🎰 Auto-update lotto results"
+            git push
+          fi
