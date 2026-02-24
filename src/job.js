@@ -27,7 +27,7 @@ const WINDOW_SHORT = 100;
 
 const FORM_LINES = 8;
 
-// ✅ שינוי 1: URL של lotto365
+// ✅ URL של lotto365
 const LOTTO_URL = "https://lotto365.co.il/תוצאות-הלוטו/";
 
 // ====== HELPERS ======
@@ -77,12 +77,60 @@ function parseCsvRows(csvText) {
 }
 
 // ====== 🔥 FETCH LATEST DRAW FROM SITE ======
-// ✅ שינוי 2: חילוץ מותאם ל-lotto365 (לא משנה שום דבר אחר בקובץ)
+function cleanMoney(x) {
+  if (!x) return null;
+  return String(x).replace(/[^\d,]/g, "").trim() || null;
+}
+
+function cleanWinners(x) {
+  if (!x) return null;
+  const t = String(x).trim();
+  // לפעמים באתר כתוב "לא חולק" או משהו דומה
+  const n = t.replace(/[^\d]/g, "");
+  return n.length ? n : t;
+}
+
+function extractPrizeInfo(pageText) {
+  // ננסה להיות סלחניים כי ניסוח באתר יכול להשתנות
+  // תופס: "פרס ראשון ... ₪ ... זוכים"
+  const prize1 = pageText.match(/פרס\s*ראשון[\s\S]{0,120}?([\d,]{1,})\s*₪[\s\S]{0,80}?(?:זוכ(?:ה|ים)|מספר\s*זוכים)\s*[:\-]?\s*(\d+|לא\s*חולק)/);
+  const prize2 = pageText.match(/פרס\s*שני[\s\S]{0,120}?([\d,]{1,})\s*₪[\s\S]{0,80}?(?:זוכ(?:ה|ים)|מספר\s*זוכים)\s*[:\-]?\s*(\d+|לא\s*חולק)/);
+
+  // "סה"כ זכיות שחולקו" / "סך הזכיות שחולקו" / "סך זכיות"
+  const total = pageText.match(/ס[הך]"?כ[\s\S]{0,80}?(?:פרסים|זכיות)[\s\S]{0,80}?([\d,]{1,})\s*₪/);
+
+  return {
+    prize1Amount: cleanMoney(prize1?.[1]),
+    prize1Winners: cleanWinners(prize1?.[2]),
+    prize2Amount: cleanMoney(prize2?.[1]),
+    prize2Winners: cleanWinners(prize2?.[2]),
+    totalPrizes: cleanMoney(total?.[1]),
+  };
+}
+
+function findSegment7(nums) {
+  // מחזיר {main, strong} או null
+  for (let i = 0; i <= nums.length - 7; i++) {
+    const seg = nums.slice(i, i + 7);
+    const first6 = seg.slice(0, 6);
+    const last1 = seg[6];
+
+    const okMain = first6.every((n) => n >= MAIN_MIN && n <= MAIN_MAX);
+    const unique6 = new Set(first6).size === 6;
+    const okStrong = last1 >= STRONG_MIN && last1 <= STRONG_MAX;
+
+    if (okMain && unique6 && okStrong) {
+      return { main: first6, strong: last1 };
+    }
+  }
+  return null;
+}
+
 async function fetchLatestDrawFromSite() {
   const res = await fetch(LOTTO_URL, {
     headers: {
       "user-agent":
-        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
       "accept-language": "he-IL,he;q=0.9,en-US;q=0.8,en;q=0.7",
     },
   });
@@ -92,59 +140,60 @@ async function fetchLatestDrawFromSite() {
   }
 
   const html = await res.text();
+  const $ = cheerio.load(html);
 
-  // ---- חותכים רק את אזור הלוטו (בלי אקסטרה) ----
-  const start = html.indexOf("תוצאות הגרלת הלוטו");
-  if (start === -1) throw new Error("Lotto section not found");
+  const pageText = $.text().replace(/\s+/g, " ").trim();
 
-  const end = html.indexOf("תוצאות הגרלת האקסטרה", start);
-  const lottoHtml = end !== -1
-    ? html.slice(start, end)
-    : html.slice(start, start + 20000);
+  // מספר הגרלה
+  const drawNoMatch =
+    pageText.match(/תוצאות\s+הגרלת\s+לוטו\s+מס[׳']?\s*(\d+)/) ||
+    pageText.match(/\bמס[׳']?\s*(\d{3,6})\b/);
 
-  const $ = cheerio.load(lottoHtml);
-  const sectionText = $.text().replace(/\s+/g, " ").trim();
+  const drawNo = drawNoMatch ? Number(drawNoMatch[1]) : null;
 
-  // ---- מספר הגרלה ----
-  const drawMatch = sectionText.match(/מס[׳']?\s*(\d{3,5})/);
-  const drawNo = drawMatch ? Number(drawMatch[1]) : null;
+  // ✅ עיקר התיקון:
+  // חותכים את ה-HTML רק עד הכותרת של אקסטרה, כדי שלא נבלבל עם המספרים של האקסטרה
+  const stopToken = "תוצאות הגרלת אקסטרה";
+  const cutIndex = html.indexOf(stopToken);
+  const mainHtml = cutIndex > -1 ? html.slice(0, cutIndex) : html;
 
-  // ---- חילוץ כל המספרים באזור ----
-  const numsAll = (sectionText.match(/\b\d{1,2}\b/g) || [])
-    .map((x) => Number(x));
+  const $main = cheerio.load(mainHtml);
 
-  let main = null;
-  let strong = null;
+  // לוקחים רק תוכן שנראה כמו "כדור" (מספר לבד), מתוך אלמנטים של jet-listing
+  const ballNums = $main(".jet-listing-dynamic-field__content")
+    .map((_, el) => {
+      const t = $main(el).text().trim();
+      if (!/^\d{1,2}$/.test(t)) return null;
+      return Number(t);
+    })
+    .get()
+    .filter((n) => Number.isFinite(n));
 
-  for (let i = 0; i <= numsAll.length - 7; i++) {
-    const seg = numsAll.slice(i, i + 7);
-    const first6 = seg.slice(0, 6);
-    const last1 = seg[6];
+  // מסננים כדי להקטין רעשים
+  const filtered = ballNums.filter((n) => n >= 1 && n <= 37);
 
-    const okMain = first6.every((n) => n >= MAIN_MIN && n <= MAIN_MAX);
-    const unique6 = new Set(first6).size === 6;
-    const okStrong = last1 >= STRONG_MIN && last1 <= STRONG_MAX;
+  // מחפשים רצף 7 (6 רגילים + חזק)
+  const seg = findSegment7(filtered);
 
-    if (okMain && unique6 && okStrong) {
-      main = first6;
-      strong = last1;
-      break;
-    }
-  }
-
-  if (!drawNo || !main || strong == null) {
+  if (!drawNo || !seg?.main || seg.strong == null) {
     throw new Error(
-      `Failed extracting lotto results (drawNo=${drawNo}, found=${numsAll.length})`
+      `Failed extracting lotto results from lotto365 (drawNo=${drawNo}, numsFound=${filtered.length})`
     );
   }
+
+  const prizeInfo = extractPrizeInfo(pageText);
 
   return {
     drawNo,
     dateStr: new Date().toISOString().slice(0, 10),
-    nums: main,
-    strong,
+    nums: seg.main,
+    strong: seg.strong,
+
+    // פרסים
+    ...prizeInfo,
   };
 }
+
 function appendDrawToCsv(csvPath, draw) {
   const line = [draw.drawNo, draw.dateStr, ...draw.nums, draw.strong].join(",") + "\n";
   fs.appendFileSync(csvPath, line);
@@ -474,12 +523,31 @@ async function main() {
 
   const lastDrawRow = rows[rows.length - 1];
 
-  // ✅ תמיד שולחים בלוק ההגרלה האחרונה + סימון אם חדשה
+  // ✅ תמיד שולחים בלוק ההגרלה האחרונה + פרסים (אם קיימים)
+  let prizesBlock = "";
+  if (latestFromSite?.prize1Amount || latestFromSite?.prize2Amount || latestFromSite?.totalPrizes) {
+    prizesBlock += "\n";
+    if (latestFromSite?.prize1Amount) {
+      prizesBlock += `\n🥇 פרס ראשון: ${escapeHtml(latestFromSite.prize1Amount)} ₪ | זוכים: ${escapeHtml(
+        latestFromSite.prize1Winners ?? "0"
+      )}`;
+    }
+    if (latestFromSite?.prize2Amount) {
+      prizesBlock += `\n🥈 פרס שני: ${escapeHtml(latestFromSite.prize2Amount)} ₪ | זוכים: ${escapeHtml(
+        latestFromSite.prize2Winners ?? "0"
+      )}`;
+    }
+    if (latestFromSite?.totalPrizes) {
+      prizesBlock += `\n💰 סך פרסים שחולקו: ${escapeHtml(latestFromSite.totalPrizes)} ₪`;
+    }
+  }
+
   const drawBlock =
     (isNewDraw ? `🚨 <b>הגרלה חדשה!</b>\n\n` : `🎰 <b>הגרלה אחרונה</b>\n\n`) +
     `מספר הגרלה: <b>${lastDrawRow.drawNo}</b>\n` +
     `מספרים: ${lastDrawRow.nums.join(", ")}\n` +
-    `חזק: ${lastDrawRow.strong}\n`;
+    `חזק: <b>${lastDrawRow.strong}</b>\n` +
+    prizesBlock;
 
   const last999 = rows.slice(-Math.min(WINDOW_LONG, rows.length));
   const last100 = rows.slice(-Math.min(WINDOW_SHORT, rows.length));
