@@ -27,7 +27,7 @@ const WINDOW_SHORT = 100;
 
 const FORM_LINES = 8;
 
-// ✅ URL של lotto365
+// ✅ שינוי 1: URL של lotto365
 const LOTTO_URL = "https://lotto365.co.il/תוצאות-הלוטו/";
 
 // ====== HELPERS ======
@@ -76,54 +76,100 @@ function parseCsvRows(csvText) {
   return rows;
 }
 
-// ====== 🔥 FETCH LATEST DRAW FROM lotto365 ======
+// ====== 🔥 FETCH LATEST DRAW FROM SITE ======
+// ✅ שינוי 2: חילוץ מותאם ל-lotto365 (לא משנה שום דבר אחר בקובץ)
 async function fetchLatestDrawFromSite() {
-  const url = "https://lotto365.co.il/feed/";
-
-  const res = await fetch(url, {
+  const res = await fetch(LOTTO_URL, {
     headers: {
-      "user-agent": "Mozilla/5.0",
+      // חשוב כדי לא לקבל HTML "ריק" / חסום
+      "user-agent":
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+      "accept-language": "he-IL,he;q=0.9,en-US;q=0.8,en;q=0.7",
     },
   });
 
   if (!res.ok) {
-    throw new Error("Failed to fetch lotto365 RSS");
+    throw new Error(`Failed fetching lotto365: HTTP ${res.status}`);
   }
 
-  const xml = await res.text();
+  const html = await res.text();
+  const $ = cheerio.load(html);
 
-  const match = xml.match(/תוצאות הגרלת לוטו מס[^\d]*(\d+)[^<]*([\d,\s]+)/);
+  const pageText = $.text().replace(/\s+/g, " ").trim();
 
-  if (!match) {
-    throw new Error("Could not extract draw from RSS");
+  // 1) מספר הגרלה (לפי הטקסט שמופיע באתר: "תוצאות הגרלת לוטו מס' 3901")
+  const drawNoMatch = pageText.match(/תוצאות\s+הגרלת\s+לוטו\s+מס[׳']?\s*(\d+)/);
+  const drawNo = drawNoMatch ? Number(drawNoMatch[1]) : null;
+
+  // 2) חיתוך איזור "קרוב" למספר ההגרלה כדי למצוא שם את הכדורים
+  let around = pageText;
+  if (drawNoMatch?.index != null) {
+    around = pageText.slice(drawNoMatch.index, drawNoMatch.index + 1200);
   }
 
-  const drawNo = Number(match[1]);
+  // 3) ניסיון חילוץ מספרים מהטקסט הקרוב
+  //    (לרוב המספרים מופיעים שם ברצף)
+  const numsAll = (around.match(/\b\d{1,2}\b/g) || []).map((x) => Number(x));
 
-  const nums = match[2]
-    .split(",")
-    .map((x) => Number(x.trim()))
-    .filter(Boolean);
+  // סריקה למציאת רצף שמתאים ל: 6 מספרים 1-37 (ייחודיים) + חזק 1-7
+  let main = null;
+  let strong = null;
 
-  if (nums.length < 7) {
-    throw new Error("Invalid numbers extracted from RSS");
+  for (let i = 0; i <= numsAll.length - 7; i++) {
+    const seg = numsAll.slice(i, i + 7);
+    const first6 = seg.slice(0, 6);
+    const last1 = seg[6];
+
+    const okMain = first6.every((n) => n >= MAIN_MIN && n <= MAIN_MAX);
+    const unique6 = new Set(first6).size === 6;
+    const okStrong = last1 >= STRONG_MIN && last1 <= STRONG_MAX;
+
+    if (okMain && unique6 && okStrong) {
+      main = first6;
+      strong = last1;
+      break;
+    }
+  }
+
+  // 4) אם לא הצליח מהטקסט, ננסה גם חילוץ מה-HTML עצמו (fallback),
+  //    זה מכסה מצב שהמספרים לא מופיעים יפה ב-text.
+  if (!main || strong == null) {
+    const htmlNums = (html.match(/>\\s*(\\d{1,2})\\s*</g) || [])
+      .map((m) => m.replace(/[^\d]/g, ""))
+      .map((x) => Number(x))
+      .filter((n) => Number.isFinite(n));
+
+    for (let i = 0; i <= htmlNums.length - 7; i++) {
+      const seg = htmlNums.slice(i, i + 7);
+      const first6 = seg.slice(0, 6);
+      const last1 = seg[6];
+
+      const okMain = first6.every((n) => n >= MAIN_MIN && n <= MAIN_MAX);
+      const unique6 = new Set(first6).size === 6;
+      const okStrong = last1 >= STRONG_MIN && last1 <= STRONG_MAX;
+
+      if (okMain && unique6 && okStrong) {
+        main = first6;
+        strong = last1;
+        break;
+      }
+    }
+  }
+
+  if (!drawNo || !main || strong == null) {
+    throw new Error("Failed extracting lotto results from lotto365");
   }
 
   return {
     drawNo,
-    dateStr: "",
-    nums: nums.slice(0, 6),
-    strong: nums[6],
-    prize1Amount: null,
-    prize1Winners: null,
-    prize2Amount: null,
-    prize2Winners: null,
-    totalPrizes: null,
+    dateStr: new Date().toISOString().slice(0, 10),
+    nums: main,
+    strong,
   };
 }
+
 function appendDrawToCsv(csvPath, draw) {
-  const line =
-    [draw.drawNo, draw.dateStr, ...draw.nums, draw.strong].join(",") + "\n";
+  const line = [draw.drawNo, draw.dateStr, ...draw.nums, draw.strong].join(",") + "\n";
   fs.appendFileSync(csvPath, line);
 }
 
@@ -451,21 +497,12 @@ async function main() {
 
   const lastDrawRow = rows[rows.length - 1];
 
-  // ✅ בלוק ההגרלה האחרונה + פרסים (אם קיימים)
+  // ✅ תמיד שולחים בלוק ההגרלה האחרונה + סימון אם חדשה
   const drawBlock =
     (isNewDraw ? `🚨 <b>הגרלה חדשה!</b>\n\n` : `🎰 <b>הגרלה אחרונה</b>\n\n`) +
     `מספר הגרלה: <b>${lastDrawRow.drawNo}</b>\n` +
     `מספרים: ${lastDrawRow.nums.join(", ")}\n` +
-    `חזק: ${lastDrawRow.strong}\n` +
-    (latestFromSite?.prize1Amount
-      ? `\n🥇 פרס ראשון: ${latestFromSite.prize1Amount} ₪ | זוכים: ${latestFromSite.prize1Winners || "0"}`
-      : "") +
-    (latestFromSite?.prize2Amount
-      ? `\n🥈 פרס שני: ${latestFromSite.prize2Amount} ₪ | זוכים: ${latestFromSite.prize2Winners || "0"}`
-      : "") +
-    (latestFromSite?.totalPrizes
-      ? `\n💰 סך פרסים שחולקו: ${latestFromSite.totalPrizes} ₪`
-      : "");
+    `חזק: ${lastDrawRow.strong}\n`;
 
   const last999 = rows.slice(-Math.min(WINDOW_LONG, rows.length));
   const last100 = rows.slice(-Math.min(WINDOW_SHORT, rows.length));
@@ -497,9 +534,7 @@ async function main() {
   ].join("\n");
 
   const formLines = generateFormLines(stats100, stats999, cmp);
-  const formBlock =
-    `\n\n🎟 <b>טופס מומלץ (${FORM_LINES} שורות)</b>\n` +
-    escapeHtml(formatFormLines(formLines));
+  const formBlock = `\n\n🎟 <b>טופס מומלץ (${FORM_LINES} שורות)</b>\n` + escapeHtml(formatFormLines(formLines));
 
   let aiText = null;
   try {
