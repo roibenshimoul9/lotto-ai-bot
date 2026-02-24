@@ -77,28 +77,46 @@ function parseCsvRows(csvText) {
 
 // ====== 🔥 FETCH LATEST DRAW FROM SITE ======
 async function fetchLatestDrawFromSite() {
-  const res = await fetch(LOTTO_URL);
+  const res = await fetch(LOTTO_URL, {
+    headers: {
+      "user-agent": "Mozilla/5.0"
+    }
+  });
+
   const html = await res.text();
   const $ = cheerio.load(html);
 
-  const headerText = $("h3").first().text();
-  const drawMatch = headerText.match(/\d+/);
-  const drawNo = drawMatch ? Number(drawMatch[0]) : null;
+  // מספר הגרלה
+  const pageText = $("body").text();
+  const drawMatch = pageText.match(/מספר הגרלה:\s*(\d+)/);
+  const drawNo = drawMatch ? Number(drawMatch[1]) : null;
 
+  // כל העיגולים של המספרים (כחולים + אדום)
   const balls = [];
-  $(".loto_info_num").each((i, el) => {
-    balls.push(Number($(el).text().trim()));
+
+  $("div").each((i, el) => {
+    const text = $(el).text().trim();
+
+    if (/^\d+$/.test(text)) {
+      const n = Number(text);
+      if (n >= 1 && n <= 37) {
+        balls.push(n);
+      }
+    }
   });
 
-  if (!drawNo || balls.length < 7) {
-    throw new Error("Failed extracting lotto results");
+  // מסננים רק את 7 המספרים הראשונים שמופיעים (6 + חזק)
+  const uniqueBalls = [...new Set(balls)].slice(0, 7);
+
+  if (!drawNo || uniqueBalls.length < 7) {
+    throw new Error("Failed extracting lotto results from lottosheli");
   }
 
   return {
     drawNo,
     dateStr: new Date().toISOString().slice(0, 10),
-    nums: balls.slice(0, 6),
-    strong: balls[6],
+    nums: uniqueBalls.slice(0, 6),
+    strong: uniqueBalls[6],
   };
 }
 
