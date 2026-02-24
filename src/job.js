@@ -81,9 +81,8 @@ function parseCsvRows(csvText) {
 async function fetchLatestDrawFromSite() {
   const res = await fetch(LOTTO_URL, {
     headers: {
-      // חשוב כדי לא לקבל HTML "ריק" / חסום
       "user-agent":
-        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
       "accept-language": "he-IL,he;q=0.9,en-US;q=0.8,en;q=0.7",
     },
   });
@@ -95,69 +94,31 @@ async function fetchLatestDrawFromSite() {
   const html = await res.text();
   const $ = cheerio.load(html);
 
-  const pageText = $.text().replace(/\s+/g, " ").trim();
+  // ===== חילוץ כדורים לפי DOM =====
+  const balls = [];
 
-  // 1) מספר הגרלה (לפי הטקסט שמופיע באתר: "תוצאות הגרלת לוטו מס' 3901")
-  const drawNoMatch = pageText.match(/תוצאות\s+הגרלת\s+לוטו\s+מס[׳']?\s*(\d+)/);
-  const drawNo = drawNoMatch ? Number(drawNoMatch[1]) : null;
-
-  // 2) חיתוך איזור "קרוב" למספר ההגרלה כדי למצוא שם את הכדורים
-  let around = pageText;
-  if (drawNoMatch?.index != null) {
-    around = pageText.slice(drawNoMatch.index, drawNoMatch.index + 1200);
-  }
-
-  // 3) ניסיון חילוץ מספרים מהטקסט הקרוב
-  //    (לרוב המספרים מופיעים שם ברצף)
-  const numsAll = (around.match(/\b\d{1,2}\b/g) || []).map((x) => Number(x));
-
-  // סריקה למציאת רצף שמתאים ל: 6 מספרים 1-37 (ייחודיים) + חזק 1-7
-  let main = null;
-  let strong = null;
-
-  for (let i = 0; i <= numsAll.length - 7; i++) {
-    const seg = numsAll.slice(i, i + 7);
-    const first6 = seg.slice(0, 6);
-    const last1 = seg[6];
-
-    const okMain = first6.every((n) => n >= MAIN_MIN && n <= MAIN_MAX);
-    const unique6 = new Set(first6).size === 6;
-    const okStrong = last1 >= STRONG_MIN && last1 <= STRONG_MAX;
-
-    if (okMain && unique6 && okStrong) {
-      main = first6;
-      strong = last1;
-      break;
+  $(".jet-listing-dynamic-field__content").each((_, el) => {
+    const txt = $(el).text().trim();
+    if (/^\d+$/.test(txt)) {
+      balls.push(Number(txt));
     }
+  });
+
+  if (balls.length < 7) {
+    throw new Error("Failed extracting lotto balls");
   }
 
-  // 4) אם לא הצליח מהטקסט, ננסה גם חילוץ מה-HTML עצמו (fallback),
-  //    זה מכסה מצב שהמספרים לא מופיעים יפה ב-text.
-  if (!main || strong == null) {
-    const htmlNums = (html.match(/>\\s*(\\d{1,2})\\s*</g) || [])
-      .map((m) => m.replace(/[^\d]/g, ""))
-      .map((x) => Number(x))
-      .filter((n) => Number.isFinite(n));
+  // 6 רגילים + 1 חזק בלבד
+  const main = balls.slice(0, 6);
+  const strong = balls[6];
 
-    for (let i = 0; i <= htmlNums.length - 7; i++) {
-      const seg = htmlNums.slice(i, i + 7);
-      const first6 = seg.slice(0, 6);
-      const last1 = seg[6];
+  // ===== מספר הגרלה =====
+  const pageText = $.text().replace(/\s+/g, " ");
+  const drawMatch = pageText.match(/מס[׳']?\s*(\d{3,5})/);
+  const drawNo = drawMatch ? Number(drawMatch[1]) : null;
 
-      const okMain = first6.every((n) => n >= MAIN_MIN && n <= MAIN_MAX);
-      const unique6 = new Set(first6).size === 6;
-      const okStrong = last1 >= STRONG_MIN && last1 <= STRONG_MAX;
-
-      if (okMain && unique6 && okStrong) {
-        main = first6;
-        strong = last1;
-        break;
-      }
-    }
-  }
-
-  if (!drawNo || !main || strong == null) {
-    throw new Error("Failed extracting lotto results from lotto365");
+  if (!drawNo) {
+    throw new Error("Failed extracting draw number");
   }
 
   return {
