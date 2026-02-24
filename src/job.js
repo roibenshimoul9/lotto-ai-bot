@@ -27,7 +27,7 @@ const WINDOW_SHORT = 100;
 
 const FORM_LINES = 8;
 
-const LOTTO_URL = "https://www.pais.co.il/lotto/";
+const LOTTO_URL = "https://lottosheli.co.il/results/lotto";
 
 // ====== HELPERS ======
 function findCsvPath() {
