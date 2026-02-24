@@ -82,99 +82,66 @@ async function fetchLatestDrawFromSite() {
   const res = await fetch(LOTTO_URL, {
     headers: {
       "user-agent":
-        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
       "accept-language": "he-IL,he;q=0.9,en-US;q=0.8,en;q=0.7",
     },
   });
 
-  if (!res.ok) throw new Error(`Failed fetching lotto365: HTTP ${res.status}`);
+  if (!res.ok) {
+    throw new Error(`Failed fetching lotto365: HTTP ${res.status}`);
+  }
 
   const html = await res.text();
 
-  // ---- 1) מוצאים את ה-IDs של האלמנטים לפי צבע (CSS) ----
-  // כחול = חזק
-  const blueIds = new Set(
-    [...html.matchAll(/elementor-element-([a-z0-9]+)[\s\S]{0,200}?background:\s*#33B5F7/gi)].map(
-      (m) => m[1]
-    )
-  );
+  // ---- חותכים רק את אזור הלוטו (בלי אקסטרה) ----
+  const start = html.indexOf("תוצאות הגרלת הלוטו");
+  if (start === -1) throw new Error("Lotto section not found");
 
-  // אדום = מספרים רגילים
-  const redIds = new Set(
-    [...html.matchAll(/elementor-element-([a-z0-9]+)[\s\S]{0,200}?background:\s*#FF5733/gi)].map(
-      (m) => m[1]
-    )
-  );
+  const end = html.indexOf("תוצאות הגרלת האקסטרה", start);
+  const lottoHtml = end !== -1
+    ? html.slice(start, end)
+    : html.slice(start, start + 20000);
 
-  // צהוב = אקסטרה (לא חובה, אבל טוב שיהיה)
-  const yellowIds = new Set(
-    [...html.matchAll(/elementor-element-([a-z0-9]+)[\s\S]{0,200}?background:\s*#F5F733/gi)].map(
-      (m) => m[1]
-    )
-  );
+  const $ = cheerio.load(lottoHtml);
+  const sectionText = $.text().replace(/\s+/g, " ").trim();
 
-  const $ = cheerio.load(html);
+  // ---- מספר הגרלה ----
+  const drawMatch = sectionText.match(/מס[׳']?\s*(\d{3,5})/);
+  const drawNo = drawMatch ? Number(drawMatch[1]) : null;
 
-  // ---- 2) מספר הגרלה ----
-  const pageText = $.text().replace(/\s+/g, " ").trim();
-  const drawNoMatch =
-    pageText.match(/תוצאות\s+הגרלת\s+לוטו\s+מס[׳']?\s*(\d{3,5})/) ||
-    pageText.match(/לוטו\s+מס[׳']?\s*(\d{3,5})/);
-  const drawNo = drawNoMatch ? Number(drawNoMatch[1]) : null;
+  // ---- חילוץ כל המספרים באזור ----
+  const numsAll = (sectionText.match(/\b\d{1,2}\b/g) || [])
+    .map((x) => Number(x));
 
-  // ---- 3) עוברים על כל המספרים באתר ומסווגים לפי צבע (לפי ה-ancestor elementor) ----
-  const mainNums = [];
+  let main = null;
   let strong = null;
 
-  $(".jet-listing-dynamic-field__content").each((_, el) => {
-    const t = $(el).text().trim();
-    if (!/^\d{1,2}$/.test(t)) return;
+  for (let i = 0; i <= numsAll.length - 7; i++) {
+    const seg = numsAll.slice(i, i + 7);
+    const first6 = seg.slice(0, 6);
+    const last1 = seg[6];
 
-    const n = Number(t);
-    if (!Number.isFinite(n)) return;
+    const okMain = first6.every((n) => n >= MAIN_MIN && n <= MAIN_MAX);
+    const unique6 = new Set(first6).size === 6;
+    const okStrong = last1 >= STRONG_MIN && last1 <= STRONG_MAX;
 
-    // מוצאים את ה-elementor-element-XXXX הכי קרוב למעלה
-    const parent = $(el).closest('[class*="elementor-element-"]');
-    const classAttr = parent.attr("class") || "";
-    const idMatch = classAttr.match(/elementor-element-([a-z0-9]+)/i);
-    const elId = idMatch ? idMatch[1] : null;
-
-    // כחול => חזק
-    if (elId && blueIds.has(elId)) {
-      if (n >= STRONG_MIN && n <= STRONG_MAX && strong == null) strong = n;
-      return;
+    if (okMain && unique6 && okStrong) {
+      main = first6;
+      strong = last1;
+      break;
     }
-
-    // אדום => רגילים
-    if (elId && redIds.has(elId)) {
-      if (n >= MAIN_MIN && n <= MAIN_MAX) mainNums.push(n);
-      return;
-    }
-
-    // צהוב => אקסטרה (מתעלמים)
-    if (elId && yellowIds.has(elId)) return;
-  });
-
-  // ---- 4) ניקוי/וולידציה ----
-  // להשאיר רק 6 ייחודיים
-  const uniqMain = [];
-  for (const n of mainNums) {
-    if (!uniqMain.includes(n)) uniqMain.push(n);
-    if (uniqMain.length === 6) break;
   }
 
-  if (!drawNo || uniqMain.length !== 6 || strong == null) {
+  if (!drawNo || !main || strong == null) {
     throw new Error(
-      `Failed extracting lotto results from lotto365 (drawNo=${drawNo}, main=${uniqMain.length}, strong=${strong})`
+      `Failed extracting lotto results (drawNo=${drawNo}, found=${numsAll.length})`
     );
   }
-
-  uniqMain.sort((a, b) => a - b);
 
   return {
     drawNo,
     dateStr: new Date().toISOString().slice(0, 10),
-    nums: uniqMain,
+    nums: main,
     strong,
   };
 }
