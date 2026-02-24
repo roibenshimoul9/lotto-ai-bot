@@ -98,17 +98,16 @@ async function fetchLatestDrawFromSite() {
   const drawNoMatch = pageText.match(/תוצאות\s+הגרלת\s+לוטו\s+מס[׳']?\s*(\d+)/);
   const drawNo = drawNoMatch ? Number(drawNoMatch[1]) : null;
 
-  // ====== 🎯 איתור data-id לפי צבע מתוך כל ה-<style> ======
+  // ====== 1) חילוץ חזק לפי צבע (כחול) ======
   const styleTextAll = $("style")
     .map((_, el) => $(el).text())
     .get()
     .join("\n");
 
-  function extractIdsByBg(hex) {
+  function extractIdsByBg(hexLower) {
     const ids = new Set();
-    // תופס elementor-element-XXXX ואז בתוך כמה מאות תווים background: #xxxxxx
     const re = new RegExp(
-      `elementor-element-([a-f0-9]{5,10})[\\s\\S]{0,800}?jet-listing-dynamic-field__content[\\s\\S]{0,800}?background:\\s*${hex.replace(
+      `elementor-element-([a-f0-9]{5,10})[\\s\\S]{0,900}?jet-listing-dynamic-field__content[\\s\\S]{0,900}?background:\\s*${hexLower.replace(
         "#",
         "\\#"
       )}`,
@@ -119,20 +118,10 @@ async function fetchLatestDrawFromSite() {
     return [...ids];
   }
 
-  const STRONG_BG = "#33b5f7"; // כחול
-  const MAIN_BG = "#ff5733"; // כתום
-
-  const strongIds = extractIdsByBg(STRONG_BG);
-  const mainIds = extractIdsByBg(MAIN_BG);
-
-  // Fallbackים לפי מה שראית בדפדפן
-  const STRONG_FALLBACK_ID = "281599c";
-  const MAIN_FALLBACK_ID = "562e6d3";
-
+  const STRONG_FALLBACK_ID = "281599c"; // מהדפדפן
+  const strongIds = extractIdsByBg("#33b5f7");
   const strongDataId = strongIds[0] || STRONG_FALLBACK_ID;
-  const mainDataIds = mainIds.length ? mainIds : [MAIN_FALLBACK_ID];
 
-  // ====== ✅ חילוץ מספר חזק (הכחול) ======
   const strongText = $(
     `[data-id="${strongDataId}"] .jet-listing-dynamic-field__content`
   )
@@ -142,40 +131,58 @@ async function fetchLatestDrawFromSite() {
 
   const strong = /^\d{1,2}$/.test(strongText) ? Number(strongText) : null;
 
-  // ====== ✅ חילוץ 6 המספרים הרגילים (הכתומים) ======
-  const mainNumsRaw = [];
+  // ====== 2) חילוץ 6 רגילים כמו הגרסה הישנה (סריקת טקסט וחיפוש רצף) ======
+  // חותכים "איזור" קרוב למספר ההגרלה כדי לצמצם רעש
+  let around = pageText;
+  if (drawNoMatch?.index != null) {
+    around = pageText.slice(drawNoMatch.index, drawNoMatch.index + 1600);
+  }
 
-  for (const id of mainDataIds) {
-    $(`[data-id="${id}"] .jet-listing-dynamic-field__content`).each((_, el) => {
-      const t = $(el).text().trim();
-      if (/^\d{1,2}$/.test(t)) {
-        const n = Number(t);
-        if (n >= MAIN_MIN && n <= MAIN_MAX) mainNumsRaw.push(n);
+  // כל המספרים באיזור
+  const numsAll = (around.match(/\b\d{1,2}\b/g) || []).map((x) => Number(x));
+
+  // מחפשים רצף של 6 מספרים 1-37 ייחודיים (לא צריך כאן את החזק)
+  let mainNums = null;
+
+  for (let i = 0; i <= numsAll.length - 6; i++) {
+    const seg = numsAll.slice(i, i + 6);
+    const okMain = seg.every((n) => n >= MAIN_MIN && n <= MAIN_MAX);
+    const unique6 = new Set(seg).size === 6;
+    if (okMain && unique6) {
+      // אם החזק בטעות נכנס לרגילים (קורה לפעמים), נדלג על הרצף הזה ונמשיך
+      if (strong != null && seg.includes(strong)) continue;
+      mainNums = seg;
+      break;
+    }
+  }
+
+  // fallback נוסף: אם לא נמצא ב-around, ננסה בכל הטקסט (לפעמים סביב ההגרלה זה לא מספיק)
+  if (!mainNums) {
+    const allNums = (pageText.match(/\b\d{1,2}\b/g) || []).map((x) => Number(x));
+    for (let i = 0; i <= allNums.length - 6; i++) {
+      const seg = allNums.slice(i, i + 6);
+      const okMain = seg.every((n) => n >= MAIN_MIN && n <= MAIN_MAX);
+      const unique6 = new Set(seg).size === 6;
+      if (okMain && unique6) {
+        if (strong != null && seg.includes(strong)) continue;
+        mainNums = seg;
+        break;
       }
-    });
+    }
   }
 
-  // הסרת כפילויות ושמירה על סדר הופעה
-  const seen = new Set();
-  let mainNums = mainNumsRaw.filter((n) =>
-    seen.has(n) ? false : (seen.add(n), true)
-  );
-
-  // אם משום מה החזק “נזל” לרגילים – נוציא אותו
-  if (strong != null) {
-    const idx = mainNums.indexOf(strong);
-    if (idx !== -1) mainNums.splice(idx, 1);
+  // מסדרים את ה-6 כמו שאתה אוהב (בד״כ באתר זה כבר בסדר; נשמור כמו שמצאנו)
+  if (mainNums) {
+    // רק ליתר בטחון: אם החזק נמצא בפנים, נוציא (ועדיין נוודא שיש 6)
+    if (strong != null && mainNums.includes(strong)) {
+      mainNums = mainNums.filter((n) => n !== strong);
+    }
+    mainNums = mainNums.slice(0, 6);
   }
-
-  mainNums = mainNums.slice(0, 6);
 
   // ====== פרסים (כמו שהיה אצלך) ======
-  const prize1Match = pageText.match(
-    /פרס ראשון.*?([\d,]+)\s*₪.*?(\d+|לא\s*חולק)\s*זוכ/
-  );
-  const prize2Match = pageText.match(
-    /פרס שני.*?([\d,]+)\s*₪.*?(\d+|לא\s*חולק)\s*זוכ/
-  );
+  const prize1Match = pageText.match(/פרס ראשון.*?([\d,]+)\s*₪.*?(\d+|לא\s*חולק)\s*זוכ/);
+  const prize2Match = pageText.match(/פרס שני.*?([\d,]+)\s*₪.*?(\d+|לא\s*חולק)\s*זוכ/);
   const totalPrizesMatch = pageText.match(/ס[הך]"?כ.*?([\d,]+)\s*₪/);
 
   const prize1Amount = prize1Match ? prize1Match[1] : null;
@@ -187,16 +194,12 @@ async function fetchLatestDrawFromSite() {
   const totalPrizes = totalPrizesMatch ? totalPrizesMatch[1] : null;
 
   // ====== בדיקות תקינות ======
-  const unique6 = new Set(mainNums).size === 6;
   const okStrong = strong != null && strong >= STRONG_MIN && strong <= STRONG_MAX;
+  const unique6 = mainNums ? new Set(mainNums).size === 6 : false;
 
-  if (!drawNo || mainNums.length !== 6 || !unique6 || !okStrong) {
+  if (!drawNo || !mainNums || mainNums.length !== 6 || !unique6 || !okStrong) {
     throw new Error(
-      `Failed extracting lotto results from lotto365 (drawNo=${drawNo}, main=${mainNums.join(
-        ","
-      )}, strong=${strong}, mainDataIds=${mainDataIds.join(
-        "|"
-      )}, strongDataId=${strongDataId})`
+      `Failed extracting lotto results from lotto365 (drawNo=${drawNo}, main=${mainNums ? mainNums.join(",") : ""}, strong=${strong}, strongDataId=${strongDataId})`
     );
   }
 
@@ -214,16 +217,12 @@ async function fetchLatestDrawFromSite() {
 }
 
 function appendDrawToCsv(csvPath, draw) {
-  const line =
-    [draw.drawNo, draw.dateStr, ...draw.nums, draw.strong].join(",") + "\n";
+  const line = [draw.drawNo, draw.dateStr, ...draw.nums, draw.strong].join(",") + "\n";
   fs.appendFileSync(csvPath, line);
 }
 
 function escapeHtml(s) {
-  return String(s)
-    .replaceAll("&", "&amp;")
-    .replaceAll("<", "&lt;")
-    .replaceAll(">", "&gt;");
+  return String(s).replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;");
 }
 
 async function sendTelegram(text) {
@@ -298,6 +297,7 @@ function computeStats(rowsWindow) {
 
   function topBottom(freqObj, k = 5) {
     const arr = Object.entries(freqObj).map(([num, c]) => ({ num: Number(num), c }));
+    arr.sort((a, b) => b.c - b.c || a.num - b.num);
     arr.sort((a, b) => b.c - a.c || a.num - b.num);
     const top = arr.slice(0, k);
     const bottom = arr.slice(-k).sort((a, b) => a.c - b.c || a.num - b.num);
@@ -520,7 +520,6 @@ async function main() {
   let latestFromSite = null;
   let isNewDraw = false;
 
-  // ✅ תמיד מושכים את ההגרלה האחרונה + מזהים אם חדשה
   try {
     latestFromSite = await fetchLatestDrawFromSite();
 
@@ -539,14 +538,12 @@ async function main() {
     console.log("Draw fetch error:", e.message);
   }
 
-  // טוענים מחדש אחרי שאולי נוספה שורה
   const csvText = fs.readFileSync(csvPath, "utf8");
   const rows = parseCsvRows(csvText);
   if (rows.length < 50) throw new Error(`Not enough rows parsed from CSV. Parsed=${rows.length}`);
 
   const lastDrawRow = rows[rows.length - 1];
 
-  // ✅ בלוק ההגרלה האחרונה + פרסים (אם קיימים)
   const drawBlock =
     (isNewDraw ? `🚨 <b>הגרלה חדשה!</b>\n\n` : `🎰 <b>הגרלה אחרונה</b>\n\n`) +
     `מספר הגרלה: <b>${lastDrawRow.drawNo}</b>\n` +
