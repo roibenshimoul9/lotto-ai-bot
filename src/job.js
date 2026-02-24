@@ -27,7 +27,8 @@ const WINDOW_SHORT = 100;
 
 const FORM_LINES = 8;
 
-const LOTTO_URL = "https://lottosheli.co.il/results/lotto";
+// ✅ שינוי 1: URL של lotto365
+const LOTTO_URL = "https://lotto365.co.il/תוצאות-הלוטו/";
 
 // ====== HELPERS ======
 function findCsvPath() {
@@ -76,47 +77,94 @@ function parseCsvRows(csvText) {
 }
 
 // ====== 🔥 FETCH LATEST DRAW FROM SITE ======
+// ✅ שינוי 2: חילוץ מותאם ל-lotto365 (לא משנה שום דבר אחר בקובץ)
 async function fetchLatestDrawFromSite() {
   const res = await fetch(LOTTO_URL, {
     headers: {
-      "user-agent": "Mozilla/5.0"
-    }
+      // חשוב כדי לא לקבל HTML "ריק" / חסום
+      "user-agent":
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+      "accept-language": "he-IL,he;q=0.9,en-US;q=0.8,en;q=0.7",
+    },
   });
+
+  if (!res.ok) {
+    throw new Error(`Failed fetching lotto365: HTTP ${res.status}`);
+  }
 
   const html = await res.text();
   const $ = cheerio.load(html);
 
-  // מספר הגרלה
-  const pageText = $("body").text();
-  const drawMatch = pageText.match(/מספר הגרלה:\s*(\d+)/);
-  const drawNo = drawMatch ? Number(drawMatch[1]) : null;
+  const pageText = $.text().replace(/\s+/g, " ").trim();
 
-  // כל העיגולים של המספרים (כחולים + אדום)
-  const balls = [];
+  // 1) מספר הגרלה (לפי הטקסט שמופיע באתר: "תוצאות הגרלת לוטו מס' 3901")
+  const drawNoMatch = pageText.match(/תוצאות\s+הגרלת\s+לוטו\s+מס[׳']?\s*(\d+)/);
+  const drawNo = drawNoMatch ? Number(drawNoMatch[1]) : null;
 
-  $("div").each((i, el) => {
-    const text = $(el).text().trim();
+  // 2) חיתוך איזור "קרוב" למספר ההגרלה כדי למצוא שם את הכדורים
+  let around = pageText;
+  if (drawNoMatch?.index != null) {
+    around = pageText.slice(drawNoMatch.index, drawNoMatch.index + 1200);
+  }
 
-    if (/^\d+$/.test(text)) {
-      const n = Number(text);
-      if (n >= 1 && n <= 37) {
-        balls.push(n);
+  // 3) ניסיון חילוץ מספרים מהטקסט הקרוב
+  //    (לרוב המספרים מופיעים שם ברצף)
+  const numsAll = (around.match(/\b\d{1,2}\b/g) || []).map((x) => Number(x));
+
+  // סריקה למציאת רצף שמתאים ל: 6 מספרים 1-37 (ייחודיים) + חזק 1-7
+  let main = null;
+  let strong = null;
+
+  for (let i = 0; i <= numsAll.length - 7; i++) {
+    const seg = numsAll.slice(i, i + 7);
+    const first6 = seg.slice(0, 6);
+    const last1 = seg[6];
+
+    const okMain = first6.every((n) => n >= MAIN_MIN && n <= MAIN_MAX);
+    const unique6 = new Set(first6).size === 6;
+    const okStrong = last1 >= STRONG_MIN && last1 <= STRONG_MAX;
+
+    if (okMain && unique6 && okStrong) {
+      main = first6;
+      strong = last1;
+      break;
+    }
+  }
+
+  // 4) אם לא הצליח מהטקסט, ננסה גם חילוץ מה-HTML עצמו (fallback),
+  //    זה מכסה מצב שהמספרים לא מופיעים יפה ב-text.
+  if (!main || strong == null) {
+    const htmlNums = (html.match(/>\\s*(\\d{1,2})\\s*</g) || [])
+      .map((m) => m.replace(/[^\d]/g, ""))
+      .map((x) => Number(x))
+      .filter((n) => Number.isFinite(n));
+
+    for (let i = 0; i <= htmlNums.length - 7; i++) {
+      const seg = htmlNums.slice(i, i + 7);
+      const first6 = seg.slice(0, 6);
+      const last1 = seg[6];
+
+      const okMain = first6.every((n) => n >= MAIN_MIN && n <= MAIN_MAX);
+      const unique6 = new Set(first6).size === 6;
+      const okStrong = last1 >= STRONG_MIN && last1 <= STRONG_MAX;
+
+      if (okMain && unique6 && okStrong) {
+        main = first6;
+        strong = last1;
+        break;
       }
     }
-  });
+  }
 
-  // מסננים רק את 7 המספרים הראשונים שמופיעים (6 + חזק)
-  const uniqueBalls = [...new Set(balls)].slice(0, 7);
-
-  if (!drawNo || uniqueBalls.length < 7) {
-    throw new Error("Failed extracting lotto results from lottosheli");
+  if (!drawNo || !main || strong == null) {
+    throw new Error("Failed extracting lotto results from lotto365");
   }
 
   return {
     drawNo,
     dateStr: new Date().toISOString().slice(0, 10),
-    nums: uniqueBalls.slice(0, 6),
-    strong: uniqueBalls[6],
+    nums: main,
+    strong,
   };
 }
 
