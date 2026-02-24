@@ -118,21 +118,66 @@ async function fetchLatestDrawFromSite() {
   const mainDataId = mainIdFromCss || MAIN_FALLBACK_ID;
 
   // ====== ✅ חילוץ 6 המספרים הכתומים (רגילים) ======
-  const mainNums = $(`[data-id="${mainDataId}"] .jet-listing-dynamic-field__content`)
-    .map((_, el) => $(el).text().trim())
-    .get()
-    .filter((t) => /^\d{1,2}$/.test(t))
-    .map((t) => Number(t))
-    .filter((n) => n >= MAIN_MIN && n <= MAIN_MAX)
-    .slice(0, 6);
+ // ---- Collect all <style> text ----
+const styleTextAll = $("style")
+  .map((_, el) => $(el).text())
+  .get()
+  .join("\n");
 
-  // ====== ✅ חילוץ המספר הכחול (חזק) ======
-  const strongText = $(`[data-id="${strongDataId}"] .jet-listing-dynamic-field__content`)
-    .first()
-    .text()
-    .trim();
+function extractIdsByBg(hex) {
+  const ids = new Set();
+  const re = new RegExp(
+    `elementor-element-([a-f0-9]{5,10})[\\s\\S]{0,400}?jet-listing-dynamic-field__content[\\s\\S]{0,400}?background:\\s*${hex}`,
+    "ig"
+  );
+  let m;
+  while ((m = re.exec(styleTextAll))) ids.add(m[1]);
+  return [...ids];
+}
 
-  const strong = /^\d{1,2}$/.test(strongText) ? Number(strongText) : null;
+const STRONG_BG = "#33B5F7"; // כחול
+const MAIN_BG = "#ff5733";   // כתום
+
+const strongIds = extractIdsByBg(STRONG_BG);
+const mainIds = extractIdsByBg(MAIN_BG);
+
+const STRONG_FALLBACK_ID = "281599c";
+const MAIN_FALLBACK_ID = "562e6d3";
+
+const strongDataId = strongIds[0] || STRONG_FALLBACK_ID;
+const mainDataIds = mainIds.length ? mainIds : [MAIN_FALLBACK_ID];
+
+// ---- Strong number ----
+const strongText = $(`[data-id="${strongDataId}"] .jet-listing-dynamic-field__content`)
+  .first()
+  .text()
+  .trim();
+
+const strong = /^\d{1,2}$/.test(strongText) ? Number(strongText) : null;
+
+// ---- Main numbers ----
+const mainNumsRaw = [];
+
+for (const id of mainDataIds) {
+  $(`[data-id="${id}"] .jet-listing-dynamic-field__content`).each((_, el) => {
+    const t = $(el).text().trim();
+    if (/^\d{1,2}$/.test(t)) {
+      const n = Number(t);
+      if (n >= MAIN_MIN && n <= MAIN_MAX) mainNumsRaw.push(n);
+    }
+  });
+}
+
+// remove duplicates
+const seen = new Set();
+let mainNums = mainNumsRaw.filter((n) => (seen.has(n) ? false : (seen.add(n), true)));
+
+if (strong != null) {
+  const idx = mainNums.indexOf(strong);
+  if (idx !== -1) mainNums.splice(idx, 1);
+}
+
+mainNums = mainNums.slice(0, 6);
 
   // ====== פרסים (כמו שהיה אצלך) ======
   const prize1Match = pageText.match(/פרס ראשון.*?([\d,]+)\s*₪.*?(\d+|לא\s*חולק)\s*זוכ/);
