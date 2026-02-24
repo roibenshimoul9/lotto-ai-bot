@@ -27,9 +27,8 @@ const WINDOW_SHORT = 100;
 
 const FORM_LINES = 8;
 
-// מקורות (מומלץ רשמי ראשון)
-const PAIS_URL = "https://www.pais.co.il/lotto/lotto_results.aspx";
-const LOTTO365_URL = "https://lotto365.co.il/תוצאות-הלוטו/";
+// ✅ URL של lotto365
+const LOTTO_URL = "https://lotto365.co.il/תוצאות-הלוטו/";
 
 // ====== HELPERS ======
 function findCsvPath() {
@@ -46,7 +45,7 @@ function safeInt(x) {
 
 /**
  * פורמט צפוי:
- * drawNo,date,n1,n2,n3,n4,n5,n6,strong
+ * drawNo,date,n1,n2,n3,n4,n5,n6,strong,...
  */
 function parseCsvRows(csvText) {
   const lines = csvText
@@ -77,6 +76,9 @@ function parseCsvRows(csvText) {
   return rows;
 }
 
+// ====== 🔥 FETCH LATEST DRAW FROM lotto365 ======
+
+
 function appendDrawToCsv(csvPath, draw) {
   const line =
     [draw.drawNo, draw.dateStr, ...draw.nums, draw.strong].join(",") + "\n";
@@ -84,20 +86,7 @@ function appendDrawToCsv(csvPath, draw) {
 }
 
 function escapeHtml(s) {
-  return String(s)
-    .replaceAll("&", "&amp;")
-    .replaceAll("<", "&lt;")
-    .replaceAll(">", "&gt;");
-}
-
-function onlyDigits(s) {
-  return String(s ?? "").replace(/[^\d]/g, "");
-}
-
-function formatILS(n) {
-  const num = Number(n);
-  if (!Number.isFinite(num)) return null;
-  return num.toLocaleString("he-IL");
+  return String(s).replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;");
 }
 
 async function sendTelegram(text) {
@@ -128,285 +117,6 @@ async function sendTelegram(text) {
       console.log("Sent to:", chat_id);
     }
   }
-}
-
-// ====== 🔥 FETCH LATEST DRAW (PAIS first, fallback lotto365) ======
-
-async function fetchHtml(url) {
-  const res = await fetch(url, {
-    headers: { "user-agent": "Mozilla/5.0" },
-  });
-  if (!res.ok) {
-    throw new Error(`HTTP ${res.status} fetching ${url}`);
-  }
-  return await res.text();
-}
-
-function validateDrawShape(draw) {
-  if (!draw) return false;
-  if (!Number.isFinite(draw.drawNo)) return false;
-  if (!Array.isArray(draw.nums) || draw.nums.length !== 6) return false;
-  if (draw.nums.some((n) => !Number.isFinite(n) || n < MAIN_MIN || n > MAIN_MAX)) return false;
-  if (!Number.isFinite(draw.strong) || draw.strong < STRONG_MIN || draw.strong > STRONG_MAX) return false;
-  return true;
-}
-
-function normalizePrizeValue(v) {
-  const d = onlyDigits(v);
-  return d ? Number(d) : null;
-}
-
-/**
- * ניסיון 1: מפעל הפיס (רשמי)
- * NOTE: סלקטורים יכולים להשתנות באתר. לכן יש parsing גמיש דרך טקסט + כמה סלקטורים.
- */
-async function fetchFromPais() {
-  const html = await fetchHtml(PAIS_URL);
-  const $ = cheerio.load(html);
-  const bodyText = $("body").text().replace(/\s+/g, " ").trim();
-
-  // מספר הגרלה
-  // ניסוי 1: חיפוש טקסט "הגרלה מספר 1234"
-  let drawNo = null;
-  const mDraw = bodyText.match(/הגרלה\s*מספר\s*(\d{3,6})/);
-  if (mDraw) drawNo = Number(mDraw[1]);
-
-  // ניסוי 2: כותרות
-  if (!drawNo) {
-    const h2 = $("h1,h2").text();
-    const mh = h2.match(/(\d{3,6})/);
-    if (mh) drawNo = Number(mh[1]);
-  }
-
-  // תאריך
-  let dateStr = "";
-  const mDate = bodyText.match(/(\d{1,2}[\/\.]\d{1,2}[\/\.]\d{2,4})/);
-  if (mDate) dateStr = mDate[1];
-
-  // מספרים (6) + חזק
-  // נסיון: כדורים/מספרים
-  const nums = [];
-  $("span,div,li").each((i, el) => {
-    const t = $(el).text().trim();
-    if (!/^\d{1,2}$/.test(t)) return;
-    const n = Number(t);
-    if (n >= MAIN_MIN && n <= MAIN_MAX) nums.push(n);
-  });
-
-  // לפעמים יש הרבה מספרים בעמוד. ניקח את הסט הראשון שנראה כמו תוצאה (6 מספרים)
-  // ננסה לזהות רצף של 6 מתוך רשימה, ולאחריו חזק 1-7.
-  let mainNums = null;
-  let strong = null;
-
-  for (let i = 0; i <= nums.length - 6; i++) {
-    const candidate = nums.slice(i, i + 6);
-    if (candidate.length !== 6) continue;
-
-    // חזק יכול להופיע אחריהם או במקום אחר. ננסה למצוא 1-7 בסביבה:
-    // אם יש 7 מספרים רצופים (6 + חזק בטווח 1-7) ניקח.
-    const maybeStrong = nums[i + 6];
-    if (Number.isFinite(maybeStrong) && maybeStrong >= STRONG_MIN && maybeStrong <= STRONG_MAX) {
-      mainNums = candidate;
-      strong = maybeStrong;
-      break;
-    }
-  }
-
-  // fallback: אם לא מצאנו חזק רציף, ננסה למצוא אלמנט שמכיל "חזק"
-  if (!mainNums) {
-    // ניקח את 6 הראשונים כשערך סביר (עדיין מאומת בהמשך)
-    mainNums = nums.slice(0, 6);
-  }
-
-  if (!strong) {
-    const strongText = bodyText.match(/חזק\s*(\d)/);
-    if (strongText) strong = Number(strongText[1]);
-  }
-
-  // פרסים: ננסה לקרוא טבלה לפי "פרס ראשון"/"פרס שני"
-  let prize1Amount = null,
-    prize1Winners = null,
-    prize2Amount = null,
-    prize2Winners = null,
-    totalPrizes = null;
-
-  $("table tr").each((i, el) => {
-    const row = $(el).text().replace(/\s+/g, " ").trim();
-    if (!row) return;
-
-    if (row.includes("פרס ראשון")) {
-      const digits = row.match(/(\d[\d,\. ]*)/g) || [];
-      // בד"כ: זוכים, סכום (או להפך). ננסה חכם: הסכום בדרך כלל גדול יותר.
-      const vals = digits.map((x) => normalizePrizeValue(x)).filter((x) => Number.isFinite(x));
-      if (vals.length) {
-        vals.sort((a, b) => b - a);
-        prize1Amount = vals[0] ?? prize1Amount;
-        // הזוכים קטן יותר
-        const winners = vals.find((v) => v <= 1000000) ?? null;
-        if (winners != null) prize1Winners = winners;
-      }
-    }
-
-    if (row.includes("פרס שני")) {
-      const digits = row.match(/(\d[\d,\. ]*)/g) || [];
-      const vals = digits.map((x) => normalizePrizeValue(x)).filter((x) => Number.isFinite(x));
-      if (vals.length) {
-        vals.sort((a, b) => b - a);
-        prize2Amount = vals[0] ?? prize2Amount;
-        const winners = vals.find((v) => v <= 1000000) ?? null;
-        if (winners != null) prize2Winners = winners;
-      }
-    }
-
-    if (row.includes("סך") && row.includes("פרסים")) {
-      const v = normalizePrizeValue(row);
-      if (v != null) totalPrizes = v;
-    }
-  });
-
-  // אם לא מצאנו total, ננסה בטקסט
-  if (totalPrizes == null) {
-    const mt = bodyText.match(/סך\s*פרסים[^0-9]*(\d[\d,\. ]*)/);
-    if (mt) totalPrizes = normalizePrizeValue(mt[1]);
-  }
-
-  const draw = {
-    drawNo,
-    dateStr,
-    nums: (mainNums || []).slice(0, 6),
-    strong,
-    prize1Amount,
-    prize1Winners,
-    prize2Amount,
-    prize2Winners,
-    totalPrizes,
-    source: "PAIS",
-  };
-
-  if (!validateDrawShape(draw)) {
-    throw new Error("PAIS parse failed (shape invalid)");
-  }
-
-  return draw;
-}
-
-/**
- * ניסיון 2: lotto365 (fallback)
- */
-async function fetchFromLotto365() {
-  const html = await fetchHtml(LOTTO365_URL);
-  const $ = cheerio.load(html);
-  const pageText = $("body").text().replace(/\s+/g, " ").trim();
-
-  const drawMatch = pageText.match(/הגרלה\s*מספר\s*(\d{3,6})/);
-  if (!drawMatch) throw new Error("Draw number not found (lotto365)");
-  const drawNo = Number(drawMatch[1]);
-
-  const dateMatch = pageText.match(/בתאריך\s*([\d\.\/]+)/);
-  const dateStr = dateMatch ? dateMatch[1] : "";
-
-  // מספרים: ננסה כמה סלקטורים נפוצים
-  const nums = [];
-  $(".lotto-ball, .ball, .number, .results .num, .result .num, .circle")
-    .each((i, el) => {
-      const n = Number($(el).text().trim());
-      if (n >= MAIN_MIN && n <= MAIN_MAX) nums.push(n);
-    });
-
-  if (nums.length < 6) throw new Error("Main numbers not found (lotto365)");
-  const mainNums = nums.slice(0, 6);
-
-  let strong = null;
-  $(".strong, .lotto-strong, .power, .strong-number")
-    .each((i, el) => {
-      const n = Number($(el).text().trim());
-      if (n >= STRONG_MIN && n <= STRONG_MAX) strong = n;
-    });
-
-  if (!strong) {
-    const mStrong = pageText.match(/חזק[^0-9]*(\d)/);
-    if (mStrong) strong = Number(mStrong[1]);
-  }
-  if (!strong) throw new Error("Strong number not found (lotto365)");
-
-  // פרסים
-  let prize1Amount = null,
-    prize1Winners = null,
-    prize2Amount = null,
-    prize2Winners = null,
-    totalPrizes = null;
-
-  $("table tr").each((i, el) => {
-    const rowText = $(el).text().replace(/\s+/g, " ").trim();
-    if (!rowText) return;
-
-    if (rowText.includes("פרס ראשון")) {
-      const vals = (rowText.match(/(\d[\d,\. ]*)/g) || [])
-        .map((x) => normalizePrizeValue(x))
-        .filter((x) => Number.isFinite(x));
-      if (vals.length) {
-        vals.sort((a, b) => b - a);
-        prize1Amount = vals[0] ?? prize1Amount;
-        const winners = vals.find((v) => v <= 1000000) ?? null;
-        if (winners != null) prize1Winners = winners;
-      }
-    }
-
-    if (rowText.includes("פרס שני")) {
-      const vals = (rowText.match(/(\d[\d,\. ]*)/g) || [])
-        .map((x) => normalizePrizeValue(x))
-        .filter((x) => Number.isFinite(x));
-      if (vals.length) {
-        vals.sort((a, b) => b - a);
-        prize2Amount = vals[0] ?? prize2Amount;
-        const winners = vals.find((v) => v <= 1000000) ?? null;
-        if (winners != null) prize2Winners = winners;
-      }
-    }
-
-    if (rowText.includes("סך") && rowText.includes("פרסים")) {
-      const v = normalizePrizeValue(rowText);
-      if (v != null) totalPrizes = v;
-    }
-  });
-
-  if (totalPrizes == null) {
-    const mt = pageText.match(/סך\s*פרסים[^0-9]*(\d[\d,\. ]*)/);
-    if (mt) totalPrizes = normalizePrizeValue(mt[1]);
-  }
-
-  const draw = {
-    drawNo,
-    dateStr,
-    nums: mainNums,
-    strong,
-    prize1Amount,
-    prize1Winners,
-    prize2Amount,
-    prize2Winners,
-    totalPrizes,
-    source: "LOTTO365",
-  };
-
-  if (!validateDrawShape(draw)) {
-    throw new Error("LOTTO365 parse failed (shape invalid)");
-  }
-
-  return draw;
-}
-
-async function fetchLatestDrawFromSite() {
-  // 1) try PAIS (official)
-  try {
-    const d = await fetchFromPais();
-    return d;
-  } catch (e) {
-    console.log("PAIS fetch/parse failed, fallback to lotto365:", e.message);
-  }
-
-  // 2) fallback lotto365
-  const d2 = await fetchFromLotto365();
-  return d2;
 }
 
 // ====== STATS ======
@@ -670,21 +380,26 @@ async function main() {
   const csvPath = findCsvPath();
   if (!csvPath) throw new Error("CSV not found. Expected: data/lotto.csv (or lotto.csv).");
 
-  // ✅ תמיד מושכים את ההגרלה האחרונה + מזהים אם חדשה
-  let latestFromSite = await fetchLatestDrawFromSite();
-  console.log("Fetched latest draw from:", latestFromSite.source, "draw:", latestFromSite.drawNo);
-
-  const existingText = fs.readFileSync(csvPath, "utf8");
-  const rowsExisting = parseCsvRows(existingText);
-  const lastDraw = rowsExisting.length ? rowsExisting[rowsExisting.length - 1].drawNo : null;
-
+  let latestFromSite = null;
   let isNewDraw = false;
-  if (latestFromSite.drawNo !== lastDraw) {
-    appendDrawToCsv(csvPath, latestFromSite);
-    isNewDraw = true;
-    console.log("New draw added:", latestFromSite.drawNo);
-  } else {
-    console.log("No new draw detected.");
+
+  // ✅ תמיד מושכים את ההגרלה האחרונה + מזהים אם חדשה
+  try {
+    latestFromSite = await fetchLatestDrawFromSite();
+
+    const existingText = fs.readFileSync(csvPath, "utf8");
+    const rowsExisting = parseCsvRows(existingText);
+    const lastDraw = rowsExisting.length ? rowsExisting[rowsExisting.length - 1].drawNo : null;
+
+    if (latestFromSite.drawNo !== lastDraw) {
+      appendDrawToCsv(csvPath, latestFromSite);
+      isNewDraw = true;
+      console.log("New draw added:", latestFromSite.drawNo);
+    } else {
+      console.log("No new draw detected.");
+    }
+  } catch (e) {
+    console.log("Draw fetch error:", e.message);
   }
 
   // טוענים מחדש אחרי שאולי נוספה שורה
@@ -694,21 +409,21 @@ async function main() {
 
   const lastDrawRow = rows[rows.length - 1];
 
-  // ✅ בלוק ההגרלה האחרונה + פרסים
-  const p1 = latestFromSite?.prize1Amount != null ? `${formatILS(latestFromSite.prize1Amount)} ₪` : null;
-  const p2 = latestFromSite?.prize2Amount != null ? `${formatILS(latestFromSite.prize2Amount)} ₪` : null;
-  const tp = latestFromSite?.totalPrizes != null ? `${formatILS(latestFromSite.totalPrizes)} ₪` : null;
-
+  // ✅ בלוק ההגרלה האחרונה + פרסים (אם קיימים)
   const drawBlock =
     (isNewDraw ? `🚨 <b>הגרלה חדשה!</b>\n\n` : `🎰 <b>הגרלה אחרונה</b>\n\n`) +
     `מספר הגרלה: <b>${lastDrawRow.drawNo}</b>\n` +
-    (lastDrawRow.dateStr ? `תאריך: ${escapeHtml(lastDrawRow.dateStr)}\n` : ``) +
     `מספרים: ${lastDrawRow.nums.join(", ")}\n` +
     `חזק: ${lastDrawRow.strong}\n` +
-    `מקור: ${escapeHtml(latestFromSite.source)}\n` +
-    (p1 ? `\n🥇 פרס ראשון: ${p1} | זוכים: ${latestFromSite.prize1Winners ?? 0}` : "") +
-    (p2 ? `\n🥈 פרס שני: ${p2} | זוכים: ${latestFromSite.prize2Winners ?? 0}` : "") +
-    (tp ? `\n💰 סך פרסים שחולקו: ${tp}` : "");
+    (latestFromSite?.prize1Amount
+      ? `\n🥇 פרס ראשון: ${latestFromSite.prize1Amount} ₪ | זוכים: ${latestFromSite.prize1Winners || "0"}`
+      : "") +
+    (latestFromSite?.prize2Amount
+      ? `\n🥈 פרס שני: ${latestFromSite.prize2Amount} ₪ | זוכים: ${latestFromSite.prize2Winners || "0"}`
+      : "") +
+    (latestFromSite?.totalPrizes
+      ? `\n💰 סך פרסים שחולקו: ${latestFromSite.totalPrizes} ₪`
+      : "");
 
   const last999 = rows.slice(-Math.min(WINDOW_LONG, rows.length));
   const last100 = rows.slice(-Math.min(WINDOW_SHORT, rows.length));
