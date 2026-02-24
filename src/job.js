@@ -81,9 +81,8 @@ function parseCsvRows(csvText) {
 async function fetchLatestDrawFromSite() {
   const res = await fetch(LOTTO_URL, {
     headers: {
-      // חשוב כדי לא לקבל HTML "ריק" / חסום
       "user-agent":
-        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
       "accept-language": "he-IL,he;q=0.9,en-US;q=0.8,en;q=0.7",
     },
   });
@@ -97,21 +96,11 @@ async function fetchLatestDrawFromSite() {
 
   const pageText = $.text().replace(/\s+/g, " ").trim();
 
-  // 1) מספר הגרלה (לפי הטקסט שמופיע באתר: "תוצאות הגרלת לוטו מס' 3901")
   const drawNoMatch = pageText.match(/תוצאות\s+הגרלת\s+לוטו\s+מס[׳']?\s*(\d+)/);
   const drawNo = drawNoMatch ? Number(drawNoMatch[1]) : null;
 
-  // 2) חיתוך איזור "קרוב" למספר ההגרלה כדי למצוא שם את הכדורים
-  let around = pageText;
-  if (drawNoMatch?.index != null) {
-    around = pageText.slice(drawNoMatch.index, drawNoMatch.index + 1200);
-  }
+  const numsAll = (pageText.match(/\b\d{1,2}\b/g) || []).map((x) => Number(x));
 
-  // 3) ניסיון חילוץ מספרים מהטקסט הקרוב
-  //    (לרוב המספרים מופיעים שם ברצף)
-  const numsAll = (around.match(/\b\d{1,2}\b/g) || []).map((x) => Number(x));
-
-  // סריקה למציאת רצף שמתאים ל: 6 מספרים 1-37 (ייחודיים) + חזק 1-7
   let main = null;
   let strong = null;
 
@@ -131,30 +120,18 @@ async function fetchLatestDrawFromSite() {
     }
   }
 
-  // 4) אם לא הצליח מהטקסט, ננסה גם חילוץ מה-HTML עצמו (fallback),
-  //    זה מכסה מצב שהמספרים לא מופיעים יפה ב-text.
-  if (!main || strong == null) {
-    const htmlNums = (html.match(/>\\s*(\\d{1,2})\\s*</g) || [])
-      .map((m) => m.replace(/[^\d]/g, ""))
-      .map((x) => Number(x))
-      .filter((n) => Number.isFinite(n));
+  // 🏆 חילוץ פרסים
+  const prize1Match = pageText.match(/פרס ראשון.*?([\d,]+)\s*₪.*?(\d+)\s*זוכ/);
+  const prize2Match = pageText.match(/פרס שני.*?([\d,]+)\s*₪.*?(\d+)\s*זוכ/);
+  const totalPrizesMatch = pageText.match(/סה.?כ.*?([\d,]+)\s*₪/);
 
-    for (let i = 0; i <= htmlNums.length - 7; i++) {
-      const seg = htmlNums.slice(i, i + 7);
-      const first6 = seg.slice(0, 6);
-      const last1 = seg[6];
+  const prize1Amount = prize1Match ? prize1Match[1] : null;
+  const prize1Winners = prize1Match ? prize1Match[2] : null;
 
-      const okMain = first6.every((n) => n >= MAIN_MIN && n <= MAIN_MAX);
-      const unique6 = new Set(first6).size === 6;
-      const okStrong = last1 >= STRONG_MIN && last1 <= STRONG_MAX;
+  const prize2Amount = prize2Match ? prize2Match[1] : null;
+  const prize2Winners = prize2Match ? prize2Match[2] : null;
 
-      if (okMain && unique6 && okStrong) {
-        main = first6;
-        strong = last1;
-        break;
-      }
-    }
-  }
+  const totalPrizes = totalPrizesMatch ? totalPrizesMatch[1] : null;
 
   if (!drawNo || !main || strong == null) {
     throw new Error("Failed extracting lotto results from lotto365");
@@ -165,6 +142,11 @@ async function fetchLatestDrawFromSite() {
     dateStr: new Date().toISOString().slice(0, 10),
     nums: main,
     strong,
+    prize1Amount,
+    prize1Winners,
+    prize2Amount,
+    prize2Winners,
+    totalPrizes,
   };
 }
 
@@ -498,11 +480,20 @@ async function main() {
   const lastDrawRow = rows[rows.length - 1];
 
   // ✅ תמיד שולחים בלוק ההגרלה האחרונה + סימון אם חדשה
-  const drawBlock =
-    (isNewDraw ? `🚨 <b>הגרלה חדשה!</b>\n\n` : `🎰 <b>הגרלה אחרונה</b>\n\n`) +
-    `מספר הגרלה: <b>${lastDrawRow.drawNo}</b>\n` +
-    `מספרים: ${lastDrawRow.nums.join(", ")}\n` +
-    `חזק: ${lastDrawRow.strong}\n`;
+const drawBlock =
+  (isNewDraw ? `🚨 <b>הגרלה חדשה!</b>\n\n` : `🎰 <b>הגרלה אחרונה</b>\n\n`) +
+  `מספר הגרלה: <b>${lastDrawRow.drawNo}</b>\n` +
+  `מספרים: ${lastDrawRow.nums.join(", ")}\n` +
+  `חזק: ${lastDrawRow.strong}\n` +
+  (latestFromSite?.prize1Amount
+    ? `\n🥇 פרס ראשון: ${latestFromSite.prize1Amount} ₪ | זוכים: ${latestFromSite.prize1Winners || "0"}`
+    : "") +
+  (latestFromSite?.prize2Amount
+    ? `\n🥈 פרס שני: ${latestFromSite.prize2Amount} ₪ | זוכים: ${latestFromSite.prize2Winners || "0"}`
+    : "") +
+  (latestFromSite?.totalPrizes
+    ? `\n💰 סך פרסים שחולקו: ${latestFromSite.totalPrizes} ₪`
+    : "");
 
   const last999 = rows.slice(-Math.min(WINDOW_LONG, rows.length));
   const last100 = rows.slice(-Math.min(WINDOW_SHORT, rows.length));
