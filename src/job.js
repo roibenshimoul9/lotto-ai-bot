@@ -78,43 +78,64 @@ function parseCsvRows(csvText) {
 
 // ====== 🔥 FETCH LATEST DRAW FROM lotto365 ======
 async function fetchLatestDrawFromSite() {
-  const apiUrl =
-    "https://lotto365.co.il/wp-admin/admin-ajax.php?action=get_lotto_results";
+  const url = "https://lotto365.co.il/תוצאות-הלוטו/";
 
-  const res = await fetch(apiUrl, {
+  const res = await fetch(url, {
     headers: {
       "user-agent": "Mozilla/5.0",
-      "accept": "application/json",
+      "accept-language": "he-IL,he;q=0.9,en;q=0.8",
     },
   });
 
   if (!res.ok) {
-    throw new Error("Failed to fetch lotto JSON API");
+    throw new Error("Failed to fetch lotto365 page");
   }
 
-  const json = await res.json();
+  const html = await res.text();
+  const $ = cheerio.load(html);
 
-  if (!json || !json.draw_number) {
-    throw new Error("Invalid lotto JSON response");
+  // ===== מספרי הלוטו (העיגולים העליונים) =====
+  const nums = [];
+
+  $(".jet-listing-dynamic-field__content")
+    .slice(0, 6)
+    .each((i, el) => {
+      const n = Number($(el).text().trim());
+      if (n) nums.push(n);
+    });
+
+  if (nums.length < 6) {
+    throw new Error("Could not extract 6 main numbers");
   }
+
+  // ===== חזק (העיגול הכחול) =====
+  const strong = Number(
+    $(".jet-listing-dynamic-field__content")
+      .eq(6)
+      .text()
+      .trim()
+  );
+
+  // ===== מספר הגרלה =====
+  const pageText = $("body").text();
+  const match = pageText.match(/תוצאות הגרלת לוטו מס[^\d]*(\d+)/);
+
+  if (!match) {
+    throw new Error("Draw number not found on page");
+  }
+
+  const drawNo = Number(match[1]);
 
   return {
-    drawNo: Number(json.draw_number),
-    dateStr: json.draw_date || "",
-    nums: [
-      Number(json.num1),
-      Number(json.num2),
-      Number(json.num3),
-      Number(json.num4),
-      Number(json.num5),
-      Number(json.num6),
-    ],
-    strong: Number(json.strong),
-    prize1Amount: Number(json.prize1_amount) || null,
-    prize1Winners: Number(json.prize1_winners) || null,
-    prize2Amount: Number(json.prize2_amount) || null,
-    prize2Winners: Number(json.prize2_winners) || null,
-    totalPrizes: Number(json.total_prizes) || null,
+    drawNo,
+    dateStr: "",
+    nums,
+    strong,
+    prize1Amount: null,
+    prize1Winners: null,
+    prize2Amount: null,
+    prize2Winners: null,
+    totalPrizes: null,
   };
 }
 
