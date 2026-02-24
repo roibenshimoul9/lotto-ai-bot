@@ -98,90 +98,84 @@ async function fetchLatestDrawFromSite() {
   const drawNoMatch = pageText.match(/תוצאות\s+הגרלת\s+לוטו\s+מס[׳']?\s*(\d+)/);
   const drawNo = drawNoMatch ? Number(drawNoMatch[1]) : null;
 
-  // ====== 🎯 מציאת data-id לפי צבע מתוך <style> ======
-  // מחפשים ב-CSS את ה-elementor-element-XXXXXXX שיש לו background כחול (#33B5F7)
-  const styleText = $("style").text();
+  // ====== 🎯 איתור data-id לפי צבע מתוך כל ה-<style> ======
+  const styleTextAll = $("style")
+    .map((_, el) => $(el).text())
+    .get()
+    .join("\n");
 
-  const strongIdFromCss =
-    styleText.match(/elementor-element-([a-f0-9]{5,10})[\s\S]{0,120}?jet-listing-dynamic-field__content[\s\S]{0,200}?background:\s*#33b5f7/i)?.[1] ||
-    null;
+  function extractIdsByBg(hex) {
+    const ids = new Set();
+    // תופס elementor-element-XXXX ואז בתוך כמה מאות תווים background: #xxxxxx
+    const re = new RegExp(
+      `elementor-element-([a-f0-9]{5,10})[\\s\\S]{0,800}?jet-listing-dynamic-field__content[\\s\\S]{0,800}?background:\\s*${hex.replace(
+        "#",
+        "\\#"
+      )}`,
+      "ig"
+    );
+    let m;
+    while ((m = re.exec(styleTextAll))) ids.add(m[1]);
+    return [...ids];
+  }
 
-  const mainIdFromCss =
-    styleText.match(/elementor-element-([a-f0-9]{5,10})[\s\S]{0,120}?jet-listing-dynamic-field__content[\s\S]{0,200}?background:\s*#ff5733/i)?.[1] ||
-    null;
+  const STRONG_BG = "#33b5f7"; // כחול
+  const MAIN_BG = "#ff5733"; // כתום
 
-  // Fallbackים לפי מה שראית בדפדפן (אם ה-CSS לא נתפס)
+  const strongIds = extractIdsByBg(STRONG_BG);
+  const mainIds = extractIdsByBg(MAIN_BG);
+
+  // Fallbackים לפי מה שראית בדפדפן
   const STRONG_FALLBACK_ID = "281599c";
   const MAIN_FALLBACK_ID = "562e6d3";
 
-  const strongDataId = strongIdFromCss || STRONG_FALLBACK_ID;
-  const mainDataId = mainIdFromCss || MAIN_FALLBACK_ID;
+  const strongDataId = strongIds[0] || STRONG_FALLBACK_ID;
+  const mainDataIds = mainIds.length ? mainIds : [MAIN_FALLBACK_ID];
 
-  // ====== ✅ חילוץ 6 המספרים הכתומים (רגילים) ======
- // ---- Collect all <style> text ----
-const styleTextAll = $("style")
-  .map((_, el) => $(el).text())
-  .get()
-  .join("\n");
+  // ====== ✅ חילוץ מספר חזק (הכחול) ======
+  const strongText = $(
+    `[data-id="${strongDataId}"] .jet-listing-dynamic-field__content`
+  )
+    .first()
+    .text()
+    .trim();
 
-function extractIdsByBg(hex) {
-  const ids = new Set();
-  const re = new RegExp(
-    `elementor-element-([a-f0-9]{5,10})[\\s\\S]{0,400}?jet-listing-dynamic-field__content[\\s\\S]{0,400}?background:\\s*${hex}`,
-    "ig"
+  const strong = /^\d{1,2}$/.test(strongText) ? Number(strongText) : null;
+
+  // ====== ✅ חילוץ 6 המספרים הרגילים (הכתומים) ======
+  const mainNumsRaw = [];
+
+  for (const id of mainDataIds) {
+    $(`[data-id="${id}"] .jet-listing-dynamic-field__content`).each((_, el) => {
+      const t = $(el).text().trim();
+      if (/^\d{1,2}$/.test(t)) {
+        const n = Number(t);
+        if (n >= MAIN_MIN && n <= MAIN_MAX) mainNumsRaw.push(n);
+      }
+    });
+  }
+
+  // הסרת כפילויות ושמירה על סדר הופעה
+  const seen = new Set();
+  let mainNums = mainNumsRaw.filter((n) =>
+    seen.has(n) ? false : (seen.add(n), true)
   );
-  let m;
-  while ((m = re.exec(styleTextAll))) ids.add(m[1]);
-  return [...ids];
-}
 
-const STRONG_BG = "#33B5F7"; // כחול
-const MAIN_BG = "#ff5733";   // כתום
+  // אם משום מה החזק “נזל” לרגילים – נוציא אותו
+  if (strong != null) {
+    const idx = mainNums.indexOf(strong);
+    if (idx !== -1) mainNums.splice(idx, 1);
+  }
 
-const strongIds = extractIdsByBg(STRONG_BG);
-const mainIds = extractIdsByBg(MAIN_BG);
-
-const STRONG_FALLBACK_ID = "281599c";
-const MAIN_FALLBACK_ID = "562e6d3";
-
-const strongDataId = strongIds[0] || STRONG_FALLBACK_ID;
-const mainDataIds = mainIds.length ? mainIds : [MAIN_FALLBACK_ID];
-
-// ---- Strong number ----
-const strongText = $(`[data-id="${strongDataId}"] .jet-listing-dynamic-field__content`)
-  .first()
-  .text()
-  .trim();
-
-const strong = /^\d{1,2}$/.test(strongText) ? Number(strongText) : null;
-
-// ---- Main numbers ----
-const mainNumsRaw = [];
-
-for (const id of mainDataIds) {
-  $(`[data-id="${id}"] .jet-listing-dynamic-field__content`).each((_, el) => {
-    const t = $(el).text().trim();
-    if (/^\d{1,2}$/.test(t)) {
-      const n = Number(t);
-      if (n >= MAIN_MIN && n <= MAIN_MAX) mainNumsRaw.push(n);
-    }
-  });
-}
-
-// remove duplicates
-const seen = new Set();
-let mainNums = mainNumsRaw.filter((n) => (seen.has(n) ? false : (seen.add(n), true)));
-
-if (strong != null) {
-  const idx = mainNums.indexOf(strong);
-  if (idx !== -1) mainNums.splice(idx, 1);
-}
-
-mainNums = mainNums.slice(0, 6);
+  mainNums = mainNums.slice(0, 6);
 
   // ====== פרסים (כמו שהיה אצלך) ======
-  const prize1Match = pageText.match(/פרס ראשון.*?([\d,]+)\s*₪.*?(\d+|לא\s*חולק)\s*זוכ/);
-  const prize2Match = pageText.match(/פרס שני.*?([\d,]+)\s*₪.*?(\d+|לא\s*חולק)\s*זוכ/);
+  const prize1Match = pageText.match(
+    /פרס ראשון.*?([\d,]+)\s*₪.*?(\d+|לא\s*חולק)\s*זוכ/
+  );
+  const prize2Match = pageText.match(
+    /פרס שני.*?([\d,]+)\s*₪.*?(\d+|לא\s*חולק)\s*זוכ/
+  );
   const totalPrizesMatch = pageText.match(/ס[הך]"?כ.*?([\d,]+)\s*₪/);
 
   const prize1Amount = prize1Match ? prize1Match[1] : null;
@@ -192,7 +186,7 @@ mainNums = mainNums.slice(0, 6);
 
   const totalPrizes = totalPrizesMatch ? totalPrizesMatch[1] : null;
 
-  // בדיקות תקינות
+  // ====== בדיקות תקינות ======
   const unique6 = new Set(mainNums).size === 6;
   const okStrong = strong != null && strong >= STRONG_MIN && strong <= STRONG_MAX;
 
@@ -200,7 +194,9 @@ mainNums = mainNums.slice(0, 6);
     throw new Error(
       `Failed extracting lotto results from lotto365 (drawNo=${drawNo}, main=${mainNums.join(
         ","
-      )}, strong=${strong}, mainDataId=${mainDataId}, strongDataId=${strongDataId})`
+      )}, strong=${strong}, mainDataIds=${mainDataIds.join(
+        "|"
+      )}, strongDataId=${strongDataId})`
     );
   }
 
@@ -216,6 +212,7 @@ mainNums = mainNums.slice(0, 6);
     totalPrizes,
   };
 }
+
 function appendDrawToCsv(csvPath, draw) {
   const line =
     [draw.drawNo, draw.dateStr, ...draw.nums, draw.strong].join(",") + "\n";
@@ -223,7 +220,10 @@ function appendDrawToCsv(csvPath, draw) {
 }
 
 function escapeHtml(s) {
-  return String(s).replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;");
+  return String(s)
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;");
 }
 
 async function sendTelegram(text) {
@@ -558,9 +558,7 @@ async function main() {
     (latestFromSite?.prize2Amount
       ? `\n🥈 פרס שני: ${latestFromSite.prize2Amount} ₪ | זוכים: ${latestFromSite.prize2Winners || "0"}`
       : "") +
-    (latestFromSite?.totalPrizes
-      ? `\n💰 סך פרסים שחולקו: ${latestFromSite.totalPrizes} ₪`
-      : "");
+    (latestFromSite?.totalPrizes ? `\n💰 סך פרסים שחולקו: ${latestFromSite.totalPrizes} ₪` : "");
 
   const last999 = rows.slice(-Math.min(WINDOW_LONG, rows.length));
   const last100 = rows.slice(-Math.min(WINDOW_SHORT, rows.length));
@@ -592,9 +590,7 @@ async function main() {
   ].join("\n");
 
   const formLines = generateFormLines(stats100, stats999, cmp);
-  const formBlock =
-    `\n\n🎟 <b>טופס מומלץ (${FORM_LINES} שורות)</b>\n` +
-    escapeHtml(formatFormLines(formLines));
+  const formBlock = `\n\n🎟 <b>טופס מומלץ (${FORM_LINES} שורות)</b>\n` + escapeHtml(formatFormLines(formLines));
 
   let aiText = null;
   try {
