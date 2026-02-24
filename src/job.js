@@ -77,7 +77,46 @@ function parseCsvRows(csvText) {
 }
 
 // ====== 🔥 FETCH LATEST DRAW FROM lotto365 ======
+async function fetchLatestDrawFromSite() {
+  const apiUrl =
+    "https://lotto365.co.il/wp-admin/admin-ajax.php?action=get_lotto_results";
 
+  const res = await fetch(apiUrl, {
+    headers: {
+      "user-agent": "Mozilla/5.0",
+      "accept": "application/json",
+    },
+  });
+
+  if (!res.ok) {
+    throw new Error("Failed to fetch lotto JSON API");
+  }
+
+  const json = await res.json();
+
+  if (!json || !json.draw_number) {
+    throw new Error("Invalid lotto JSON response");
+  }
+
+  return {
+    drawNo: Number(json.draw_number),
+    dateStr: json.draw_date || "",
+    nums: [
+      Number(json.num1),
+      Number(json.num2),
+      Number(json.num3),
+      Number(json.num4),
+      Number(json.num5),
+      Number(json.num6),
+    ],
+    strong: Number(json.strong),
+    prize1Amount: Number(json.prize1_amount) || null,
+    prize1Winners: Number(json.prize1_winners) || null,
+    prize2Amount: Number(json.prize2_amount) || null,
+    prize2Winners: Number(json.prize2_winners) || null,
+    totalPrizes: Number(json.total_prizes) || null,
+  };
+}
 
 function appendDrawToCsv(csvPath, draw) {
   const line =
